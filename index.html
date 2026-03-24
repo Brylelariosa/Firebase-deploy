@@ -54,15 +54,27 @@ if (typeof supabase === 'undefined') console.warn('Supabase SDK not loaded — p
 // ── CLOUD SAVE / LOAD ────────────────────────────────────────────────────────
 let _realtimeChannel = null;
 
+// Single source of truth for the Supabase row body — fixes the three-way
+// duplication bug where proxy_prefs was missing from the beforeunload keepalive.
+function _buildSaveBody(uid) {
+  return JSON.stringify({
+    id:          uid,
+    lib:         JSON.stringify(window._lib),
+    log:         JSON.stringify((window._log || []).slice(0, LOG_CAP)),
+    collections: JSON.stringify(window._collections || []),
+    proxy_prefs: JSON.stringify(_lastGoodProxyByDomain),
+    updated_at:  Date.now(),
+    last_check:  window._lastCheckTime || 0
+  });
+}
+
 async function cloudSave(uid, lib, log) {
   try {
     if (!uid || !lib || lib.length === 0) return false;
     const token = window._sessionToken;
     if (!token) return false;
-    // Use a 12s timeout — slow/throttled connections (e.g. carrier data plans)
-    // can hang indefinitely without this, making the save appear to silently fail.
     const ctrl = new AbortController();
-    const timeout = setTimeout(() => ctrl.abort(), 12000);
+    const timeout = setTimeout(() => ctrl.abort(), CLOUD_TIMEOUT_MS);
     try {
       const res = await fetch(SUPABASE_URL + '/rest/v1/user_data', {
         method: 'POST',
@@ -73,19 +85,10 @@ async function cloudSave(uid, lib, log) {
           'Authorization': 'Bearer ' + token,
           'Prefer': 'resolution=merge-duplicates'
         },
-        body: JSON.stringify({
-          id: uid,
-          lib: JSON.stringify(lib),
-          log: JSON.stringify(log.slice(0, 100)),
-          collections: JSON.stringify(window._collections || []),
-          proxy_prefs: JSON.stringify(_lastGoodProxyByDomain),
-          updated_at: Date.now(),
-          last_check: window._lastCheckTime || 0
-        })
+        body: _buildSaveBody(uid)
       });
       clearTimeout(timeout);
       if (!res.ok) { const t = await res.text(); throw new Error(t); }
-      // Sync succeeded — clear the persisted pending flag
       try { if (uid) localStorage.removeItem('mgt_pending_sync_' + uid); } catch {}
       return true;
     } catch(e) {
@@ -95,12 +98,8 @@ async function cloudSave(uid, lib, log) {
   } catch(e) {
     const reason = e.name === 'AbortError' ? 'timeout (slow connection)' : e.message || e;
     console.warn('Cloud save failed:', reason);
-    // If it failed fast (not a timeout) while navigator.onLine is true,
-    // it's likely a carrier-level block (e.g. Dito Facebook promo).
-    // Flag it so the UI can suggest using Opera.
     if (e.name !== 'AbortError' && navigator.onLine) {
       window._cappedConnection = true;
-      // Reset flag after 5 min in case they switch to real data
       clearTimeout(window._cappedConnectionTimer);
       window._cappedConnectionTimer = setTimeout(() => { window._cappedConnection = false; }, 300000);
     }
@@ -163,7 +162,7 @@ function startRealtimeSync(uid) {
       const d = payload.new;
       const cloudTime = d.updated_at || 0;
       const localTime = window._lastSaveTime || 0;
-      if (cloudTime > localTime + 2000) { // 2s grace to avoid echo
+      if (cloudTime > localTime + REALTIME_GRACE_MS) {
         const oldLib = window._lib || [];
         const incomingLib = JSON.parse(d.lib || '[]');
         incomingLib.forEach(m => { if (m.cover) m.cover = cleanCoverUrl(m.cover); });
@@ -178,7 +177,12 @@ function startRealtimeSync(uid) {
         });
 
         window._lib = newLib;
-        window._log = JSON.parse(d.log || '[]');
+        // Bug fix: union-merge the log instead of replacing it, so local
+        // unsynced read-progress entries are never clobbered by realtime events.
+        const incomingLog = JSON.parse(d.log || '[]');
+        const logMap = new Map();
+        [...(window._log || []), ...incomingLog].forEach(u => { if (!logMap.has(u.id)) logMap.set(u.id, u); });
+        window._log = [...logMap.values()].sort((a, b) => b.time - a.time).slice(0, LOG_CAP);
         if (d.collections) window._collections = JSON.parse(d.collections || '[]');
 
         // If local had higher chRead for any manga, push the merge back to cloud
@@ -279,7 +283,7 @@ _sb.auth.onAuthStateChange(async (event, session) => {
       const localLog = window._log || [];
       const logMap = new Map();
       [...localLog, ...cloud.log].forEach(u => { if (!logMap.has(u.id)) logMap.set(u.id, u); });
-      const mergedLog = [...logMap.values()].sort((a,b) => b.time - a.time).slice(0, 100);
+      const mergedLog = [...logMap.values()].sort((a,b) => b.time - a.time).slice(0, LOG_CAP);
 
       const mergedCols = cloud.collections?.length ? cloud.collections : (window._collections || []);
 
@@ -334,6 +338,8 @@ _sb.auth.onAuthStateChange(async (event, session) => {
     };
     // Check if last session left an unsynced save (e.g. app closed on throttled data)
     setTimeout(_checkPendingSyncOnLoad, 3000);
+    // Start cooldown countdown on Check Updates button if a recent check exists
+    setTimeout(_startCooldownDisplay, 0);
 
   } else {
     // Logged out — clear all in-memory and local data so next account starts fresh
@@ -928,6 +934,7 @@ body.detail-open { overflow:hidden;position:fixed;width:100%; }
     <div class="stat"><div class="stat-val c2" id="s-new">0</div><div class="stat-label">New Chapters</div></div>
     <div class="stat"><div class="stat-val c3" id="s-reading">0</div><div class="stat-label">Reading</div></div>
     <div class="stat"><div class="stat-val c4" id="s-completed">0</div><div class="stat-label">Completed</div></div>
+    <div class="stat" id="stat-archived" style="display:none"><div class="stat-val" style="color:var(--muted)" id="s-archived">0</div><div class="stat-label">Archived</div></div>
   </div>
 
   <div class="tabs">
@@ -958,6 +965,7 @@ body.detail-open { overflow:hidden;position:fixed;width:100%; }
             <option value="on-hold">On Hold</option>
             <option value="dropped">Dropped</option>
             <option value="plan">Plan to Read</option>
+            <option value="archived">📦 Archived</option>
           </select>
           <select class="flt" id="flt-sort" onchange="filterLib()">
             <option value="default">Default</option>
@@ -1267,6 +1275,16 @@ const MD      = 'https://api.mangadex.org';
 const COVERS  = 'https://uploads.mangadex.org/covers';
 const COMICK_API = 'https://api.comick.fun';
 
+// ── TUNING CONSTANTS ──────────────────────────────────────────────────────────
+const LOG_CAP              = 100;    // max update log entries stored
+const SAVE_DEBOUNCE_MS     = 400;    // ms to batch rapid saves before cloud write
+const CLOUD_TIMEOUT_MS     = 12000;  // ms before a cloud save is considered timed-out
+const REALTIME_GRACE_MS    = 2000;   // ms grace to avoid echoing our own realtime events
+const RETRY_DELAY_MS       = 8000;   // ms before retrying a failed cloud save
+const CHECK_COOLDOWN_MS    = 30 * 60 * 1000; // 30 min between bulk update checks
+const CHAPTER_CACHE_TTL_MS = 10 * 60 * 1000; // 10 min chapter-number cache TTL
+const HTML_CACHE_TTL_MS    = 4 * 60 * 60 * 1000; // 4 hr HTML page cache TTL
+
 // ── OWN PROXY ────────────────────────────────────────────────────────────────
 // Our own Supabase Edge Function proxy — no shared rate limits, real browser
 // User-Agent headers, and it's always tried first before public proxies.
@@ -1324,7 +1342,8 @@ function renderCollectionsList() {
     list.innerHTML = '<div style="font-size:10px;color:var(--muted);padding:8px 0;letter-spacing:.5px">No collections yet. Click + New Collection to create one.</div>';
     return;
   }
-  list.innerHTML = window._collections.map(c => {
+  const sorted = [...window._collections].sort((a, b) => a.name.localeCompare(b.name));
+  list.innerHTML = sorted.map(c => {
     const count = window._lib.filter(m => (m.collections||[]).includes(c.id)).length;
     return `<div class="col-row" id="col-row-${c.id}">
       <input type="color" class="col-color-pick" value="${c.color}" onchange="updateCollectionColor('${c.id}',this.value)" title="Pick color">
@@ -1373,8 +1392,9 @@ function rebuildCollectionFilter() {
   const sel = document.getElementById('flt-collection');
   if (!sel) return;
   const current = sel.value;
+  const sorted = [...window._collections].sort((a, b) => a.name.localeCompare(b.name));
   sel.innerHTML = '<option value="">All Collections</option>' +
-    window._collections.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('');
+    sorted.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('');
   if (current && window._collections.find(c => c.id === current)) sel.value = current;
 }
 
@@ -1441,16 +1461,26 @@ function _dlog(tag, msg, data) {
   // Stream to live panel if open
   const live = document.getElementById('dbglog-live');
   if (live && live.style.display !== 'none') {
-    const color = tag==='ERR'?'var(--accent)':tag==='OK'?'var(--success)':tag==='RETRY'?'var(--accent2)':'var(--muted)';
-    const line = document.createElement('div');
-    line.className = 'dbg-log-line';
-    line.innerHTML = '<span style="color:var(--muted)">' + ts + '</span> '
-      + '<span style="color:' + color + ';font-weight:700">[' + tag + ']</span> '
-      + '<span style="color:var(--text)">' + msg + '</span>'
-      + (data != null ? '<span style="color:var(--muted)"> → ' + JSON.stringify(data) + '</span>' : '');
-    live.appendChild(line);
+    live.appendChild(_buildLogLine({ ts, tag, msg, data: data !== undefined ? data : null }));
     live.scrollTop = live.scrollHeight;
   }
+}
+
+// Safe log line builder — never uses innerHTML for dynamic data to prevent XSS
+// if a malicious proxy returns HTML-containing JSON values.
+function _buildLogLine(e) {
+  const color = e.tag==='ERR'?'var(--accent)':e.tag==='OK'?'var(--success)':e.tag==='RETRY'?'var(--accent2)':'var(--muted)';
+  const line = document.createElement('div');
+  line.className = 'dbg-log-line';
+  const tsSpan  = document.createElement('span'); tsSpan.style.color  = 'var(--muted)'; tsSpan.textContent = e.ts;
+  const tagSpan = document.createElement('span'); tagSpan.style.color = color; tagSpan.style.fontWeight = '700'; tagSpan.textContent = ' [' + e.tag + '] ';
+  const msgSpan = document.createElement('span'); msgSpan.style.color = 'var(--text)';  msgSpan.textContent = e.msg;
+  line.appendChild(tsSpan); line.appendChild(tagSpan); line.appendChild(msgSpan);
+  if (e.data != null) {
+    const dataSpan = document.createElement('span'); dataSpan.style.color = 'var(--muted)'; dataSpan.textContent = ' → ' + JSON.stringify(e.data);
+    line.appendChild(dataSpan);
+  }
+  return line;
 }
 
 function openDebugLog() {
@@ -1475,18 +1505,9 @@ function switchDbgTab(tab) {
   if (tab === 'log') {
     const cnt = document.getElementById('dbglog-count');
     if (cnt) cnt.textContent = window._debugLog.length;
-    // Re-render full log
+    // Re-render full log safely (textContent only, no innerHTML for data values)
     live.innerHTML = '';
-    window._debugLog.forEach(e => {
-      const color = e.tag==='ERR'?'var(--accent)':e.tag==='OK'?'var(--success)':e.tag==='RETRY'?'var(--accent2)':'var(--muted)';
-      const el = document.createElement('div');
-      el.className = 'dbg-log-line';
-      el.innerHTML = '<span style="color:var(--muted)">' + e.ts + '</span> '
-        + '<span style="color:' + color + ';font-weight:700">[' + e.tag + ']</span> '
-        + '<span style="color:var(--text)">' + e.msg + '</span>'
-        + (e.data != null ? '<span style="color:var(--muted)"> → ' + JSON.stringify(e.data) + '</span>' : '');
-      live.appendChild(el);
-    });
+    window._debugLog.forEach(e => { live.appendChild(_buildLogLine(e)); });
     live.scrollTop = live.scrollHeight;
   } else {
     renderUrlWarnings();
@@ -1549,17 +1570,18 @@ function openSettings() {
   const avatarEl = document.getElementById('settings-avatar');
   if (avatarEl) avatarEl.textContent = email && email !== '—' ? email[0].toUpperCase() : '?';
   const lib = window._lib || [];
+  const active = lib.filter(m => !m.archived);
   const libCount = document.getElementById('settings-lib-count');
-  if (libCount) libCount.textContent = lib.length.toLocaleString();
+  if (libCount) libCount.textContent = active.length.toLocaleString();
   const chReadEl = document.getElementById('settings-ch-read');
   if (chReadEl) {
-    const total = lib.reduce((sum, m) => sum + (m.chRead || 0), 0);
+    const total = active.reduce((sum, m) => sum + (m.chRead || 0), 0);
     chReadEl.textContent = total.toLocaleString();
   }
   const newCountEl = document.getElementById('settings-new-count');
-  if (newCountEl) newCountEl.textContent = lib.filter(m => m.hasNew).length.toLocaleString();
+  if (newCountEl) newCountEl.textContent = active.filter(m => m.hasNew).length.toLocaleString();
   const completedEl = document.getElementById('settings-completed-count');
-  if (completedEl) completedEl.textContent = lib.filter(m => m.readingStatus === 'completed').length.toLocaleString();
+  if (completedEl) completedEl.textContent = active.filter(m => m.readingStatus === 'completed').length.toLocaleString();
   const themeLbl = document.getElementById('settings-theme-lbl');
   if (themeLbl) themeLbl.textContent = document.body.classList.contains('light') ? 'Light' : 'Dark';
   // Highlight active layout buttons
@@ -1577,10 +1599,46 @@ function closeSettings() {
   document.body.style.overflow = '';
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// STOP CHECK UPDATES
-// ─────────────────────────────────────────────────────────────────────────────
-window._checkStop = false;
+// ── CHECK UPDATES COOLDOWN DISPLAY ───────────────────────────────────────────
+// Updates the button label with a live countdown when the cooldown is active,
+// so users know exactly when they can check again instead of seeing a mystery
+// disabled state or a cryptic "checked recently" toast.
+let _cooldownInterval = null;
+function _updateCheckBtnCooldown() {
+  const btn = document.getElementById('checkBtn');
+  if (!btn) return;
+  if (!window._lastCheckTime) {
+    btn.querySelector('.spin-icon') && (btn.innerHTML = '<span class="spin-icon">↻</span> CHECK UPDATES');
+    clearInterval(_cooldownInterval);
+    _cooldownInterval = null;
+    return;
+  }
+  const elapsed  = Date.now() - window._lastCheckTime;
+  const remaining = CHECK_COOLDOWN_MS - elapsed;
+  if (remaining <= 0) {
+    btn.innerHTML = '<span class="spin-icon">↻</span> CHECK UPDATES';
+    btn.title = '';
+    clearInterval(_cooldownInterval);
+    _cooldownInterval = null;
+  } else {
+    const mins = Math.ceil(remaining / 60000);
+    btn.innerHTML = '<span class="spin-icon">↻</span> CHECK (avail. in ' + mins + 'm)';
+    btn.title = 'Cooldown: ' + mins + ' min remaining';
+    if (!_cooldownInterval) {
+      _cooldownInterval = setInterval(_updateCheckBtnCooldown, 30000); // refresh every 30s
+    }
+  }
+}
+
+// Call after a check completes and after login (when _lastCheckTime is restored)
+function _startCooldownDisplay() {
+  _updateCheckBtnCooldown();
+  if (_cooldownInterval) clearInterval(_cooldownInterval);
+  _cooldownInterval = null;
+  if (window._lastCheckTime && Date.now() - window._lastCheckTime < CHECK_COOLDOWN_MS) {
+    _cooldownInterval = setInterval(_updateCheckBtnCooldown, 30000);
+  }
+}
 
 function stopCheckUpdates() {
   window._checkStop = true;
@@ -1637,21 +1695,20 @@ function _scheduleCloudSave() {
       _setPendingSync(true);
       setSyncDot(navigator.onLine ? 'err' : 'offline');
       if (navigator.onLine) {
-        // Online but failed — retry once after 8s (token refresh / brief blip)
+        // Online but failed — retry once after RETRY_DELAY_MS (token refresh / brief blip)
         setTimeout(async () => {
           if (!window._fbSave) return;
           setSyncDot('syncing');
           const ok2 = await window._fbSave();
           _setPendingSync(!ok2);
           setSyncDot(ok2 === false ? 'err' : 'ok');
-        }, 8000);
+        }, RETRY_DELAY_MS);
       }
-      // If offline, the 'online' event listener will retry automatically
     } else {
       _setPendingSync(false);
       setSyncDot('ok');
     }
-  }, 400);
+  }, SAVE_DEBOUNCE_MS);
 }
 
 function saveLib() {
@@ -1672,6 +1729,9 @@ function saveLib() {
 function saveLog() {
   const uid = window._fbUser?.id || window._fbUser?.uid;
   const key = uid ? 'mgt2_log_' + uid : 'mgt2_log';
+  // Stamp _lastSaveTime so the realtime grace-period check doesn't
+  // clobber a log entry that hasn't reached the cloud yet.
+  window._lastSaveTime = Date.now();
   localStorage.setItem(key, JSON.stringify(window._log));
   if (window._sessionToken) setSyncDot('syncing');
   _scheduleCloudSave();
@@ -1894,7 +1954,7 @@ async function fetchJSON(url, ms = 9000) {
 // INDEXEDDB HTML CACHE — persists proxy responses across page loads (30-min TTL)
 // ─────────────────────────────────────────────────────────────────────────────
 const _htmlCache = new Map(); // in-memory layer (fast same-session hits)
-const _HTML_CACHE_TTL = 30 * 60 * 1000; // 30 minutes
+const _HTML_CACHE_TTL = HTML_CACHE_TTL_MS;
 const _idb = (() => new Promise(resolve => {
   try {
     const req = indexedDB.open('mangatrack_cache', 1);
@@ -2011,15 +2071,7 @@ async function _cloudSaveProxyPrefs() {
         'Authorization': 'Bearer ' + token,
         'Prefer': 'resolution=merge-duplicates'
       },
-      body: JSON.stringify({
-        id: uid,
-        lib: JSON.stringify(window._lib),
-        log: JSON.stringify((window._log || []).slice(0, 100)),
-        collections: JSON.stringify(window._collections || []),
-        proxy_prefs: JSON.stringify(_lastGoodProxyByDomain),
-        updated_at: Date.now(),
-        last_check: window._lastCheckTime || 0
-      })
+      body: _buildSaveBody(uid)
     });
   } catch {}
 }
@@ -2756,7 +2808,7 @@ async function getLatestCh(mdId, customUrl, skipCache = false) {
   const cacheKey = (mdId || '') + '|' + (customUrl || '');
   if (!skipCache) {
     const cached = _chapterCache.get(cacheKey);
-    if (cached && Date.now() - cached.ts < 10 * 60 * 1000) return cached.result; // 10 min cache
+    if (cached && Date.now() - cached.ts < CHAPTER_CACHE_TTL_MS) return cached.result;
   }
 
   // If a custom URL is set, use it exclusively — never fall back to MangaDex for
@@ -2892,6 +2944,13 @@ async function _getLatestChFast(mdId) {
 }
 
 async function checkAllUpdates() {
+  // ── Cooldown guard with visible countdown ─────────────────────────────────
+  const elapsed = window._lastCheckTime ? Date.now() - window._lastCheckTime : Infinity;
+  if (elapsed < CHECK_COOLDOWN_MS) {
+    const remaining = Math.ceil((CHECK_COOLDOWN_MS - elapsed) / 60000);
+    showToast('Checked recently — available in ~' + remaining + ' min', 'err');
+    return;
+  }
   const tracked = lib.filter(m => {
     if (!(m.mdId || m.customUrl)) return false;
     if (m.archived) return false;
@@ -3000,7 +3059,7 @@ async function checkAllUpdates() {
   );
 
   await mdPool;
-  updLog = updLog.slice(0, 100);
+  updLog = updLog.slice(0, LOG_CAP);
   saveLib(); saveLog(); renderLib(); renderLog();
   btn.classList.remove('spinning'); btn.disabled = false;
   if (cancelBtn) cancelBtn.style.display = 'none';
@@ -3019,11 +3078,12 @@ async function checkAllUpdates() {
     localStorage.setItem('mgt_last_check_' + window._fbUser.id, String(checkTime));
     window._fbSave && window._fbSave();
   }
+  _startCooldownDisplay(); // start countdown on the button
   if (found > 0) showToast('🎉 ' + found + ' new update' + (found>1?'s':'') + '! (custom URLs still checking…)');
   else showToast('MangaDex done ✓ — custom URLs still checking…');
 
   customPool.then(() => {
-    updLog = updLog.slice(0, 100);
+    updLog = updLog.slice(0, LOG_CAP);
     saveLib(); saveLog(); renderLib(); renderLog();
     if (window._fbUser) window._fbSave && window._fbSave();
     window._debugActive = false;
@@ -3038,15 +3098,7 @@ async function checkAllUpdates() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MANGADEX SEARCH
-// ─────────────────────────────────────────────────────────────────────────────
-async function searchMD(title) {
-  const d = await mdFetch('/manga?title=' + encodeURIComponent(title) + '&limit=8&includes[]=cover_art&contentRating[]=safe&contentRating[]=suggestive&contentRating[]=erotica&contentRating[]=pornographic');
-  return d.data || [];
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// RENDER
+// MANGADEX LIVE SEARCH
 // ─────────────────────────────────────────────────────────────────────────────
 let _currentPage = 1;
 const _PAGE_SIZE = 50;
@@ -3065,8 +3117,11 @@ window.renderLib = function() {
   let items = lib.filter(m => {
     if (q && !m.title.toLowerCase().includes(q)) return false;
     if (ft && m.type !== ft) return false;
+    // Archived filter: show archived only when explicitly selected; hide from all other views
+    if (fs === 'archived') { if (!m.archived) return false; }
+    else if (m.archived) return false; // hide archived from all non-archived views
     if (fs === 'has-new') { if (!(m.hasNew && (m.chLatest||0) > (m.chRead||0))) return false; }
-    else if (fs && m.readingStatus !== fs) return false;
+    else if (fs && fs !== 'archived' && m.readingStatus !== fs) return false;
     if (fc && !(m.collections||[]).includes(fc)) return false;
     return true;
   });
@@ -3218,10 +3273,16 @@ function postProcessCards() {
 window.updateStats = function() {
   const el = id => document.getElementById(id);
   if (!el('s-total')) return;
-  el('s-total').textContent     = lib.length;
-  el('s-new').textContent       = lib.filter(m => m.hasNew && (m.chLatest||0) > (m.chRead||0)).length;
-  el('s-reading').textContent   = lib.filter(m => m.readingStatus === 'reading').length;
-  el('s-completed').textContent = lib.filter(m => m.readingStatus === 'completed').length;
+  const active = lib.filter(m => !m.archived);
+  el('s-total').textContent     = active.length;
+  el('s-new').textContent       = active.filter(m => m.hasNew && (m.chLatest||0) > (m.chRead||0)).length;
+  el('s-reading').textContent   = active.filter(m => m.readingStatus === 'reading').length;
+  el('s-completed').textContent = active.filter(m => m.readingStatus === 'completed').length;
+  const archived = lib.filter(m => m.archived).length;
+  const archEl = el('s-archived');
+  if (archEl) archEl.textContent = archived;
+  const archStat = el('stat-archived');
+  if (archStat) archStat.style.display = archived > 0 ? '' : 'none';
   const unread = updLog.filter(u => !u.read).length;
   const badge = el('upd-badge');
   if (badge) { badge.style.display = unread ? 'inline' : 'none'; badge.textContent = unread; }
@@ -3254,6 +3315,12 @@ function markRead(id) {
   if (m.chLatest > 0 && m.chLatest > (m.chRead||0)) { m.chRead = m.chLatest; m.hasNew = false; saveLib(); renderLib(); showToast('Marked Ch.'+m.chLatest+' as read ✓'); }
   else if (!m.chLatest) showToast('Hit Refresh or Check Updates first', 'err');
   else showToast('Already up to date!');
+}
+function unarchive(id) {
+  const m = lib.find(x => x.id === id); if (!m) return;
+  m.archived = false;
+  saveLib(); renderLib();
+  showToast('"' + m.title + '" restored from archive ✓');
 }
 function del(id) {
   const m = lib.find(x => x.id === id); if (!m) return;
@@ -3392,7 +3459,13 @@ async function save(){const title=document.getElementById('f-title').value.trim(
 // ─────────────────────────────────────────────────────────────────────────────
 // MANGADEX LIVE SEARCH
 // ─────────────────────────────────────────────────────────────────────────────
-function onMDSearch(e){clearTimeout(mdTimer);const val=e.target.value.trim();const results=document.getElementById('md-results');if(!val){results.classList.remove('open');return;}results.innerHTML='<div class="sr-msg loading">SEARCHING MANGADEX…</div>';results.classList.add('open');mdTimer=setTimeout(async()=>{try{const data=await searchMD(val);if(!data.length){results.innerHTML='<div class="sr-msg">No results found</div>';return;}results.innerHTML=data.map(m=>{const title=m.attributes.title.en||Object.values(m.attributes.title)[0]||'Unknown';const type=mdType(m);const status=m.attributes.status||'ongoing';const cover=coverUrl(m);const info=JSON.stringify({id:m.id,title,type,status,cover:cover||'',contentRating:m.attributes.contentRating||'safe'});return '<div class="sr-item" onclick=\'selectMD('+info.replace(/'/g,"&#39;")+')\'>'+  (cover?'<img class="sr-thumb" src="'+esc(cover)+'" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'flex\'" alt=""><div class="sr-ph" style="display:none">'+title.charAt(0)+'</div>':'<div class="sr-ph">'+title.charAt(0)+'</div>')+'<div class="sr-info"><div class="sr-name">'+esc(title)+'</div><div class="sr-meta">'+type+' · '+status+'</div></div></div>';}).join('');}catch(err){results.innerHTML='<div class="sr-msg">Error: '+esc(err.message)+'</div>';}},600);}
+async function searchMD(title) {
+  const d = await fetchJSON(MD + '/manga?title=' + encodeURIComponent(title) + '&limit=8&includes[]=cover_art&contentRating[]=safe&contentRating[]=suggestive&contentRating[]=erotica&contentRating[]=pornographic');
+  if (d === 'RATE_LIMITED') return 'RATE_LIMITED';
+  return d?.data || [];
+}
+
+function onMDSearch(e){clearTimeout(mdTimer);const val=e.target.value.trim();const results=document.getElementById('md-results');if(!val){results.classList.remove('open');return;}results.innerHTML='<div class="sr-msg loading">SEARCHING MANGADEX…</div>';results.classList.add('open');mdTimer=setTimeout(async()=>{try{const data=await searchMD(val);if(data==='RATE_LIMITED'){results.innerHTML='<div class="sr-msg" style="color:var(--accent2)">⚠ MangaDex is rate-limiting — wait a moment and try again</div>';return;}if(!data||!data.length){results.innerHTML='<div class="sr-msg">No results found</div>';return;}results.innerHTML=data.map(m=>{const title=m.attributes.title.en||Object.values(m.attributes.title)[0]||'Unknown';const type=mdType(m);const status=m.attributes.status||'ongoing';const cover=coverUrl(m);const info=JSON.stringify({id:m.id,title,type,status,cover:cover||'',contentRating:m.attributes.contentRating||'safe'});return '<div class="sr-item" onclick=\'selectMD('+info.replace(/'/g,"&#39;")+')\'>'+  (cover?'<img class="sr-thumb" src="'+esc(cover)+'" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'flex\'" alt=""><div class="sr-ph" style="display:none">'+title.charAt(0)+'</div>':'<div class="sr-ph">'+title.charAt(0)+'</div>')+'<div class="sr-info"><div class="sr-name">'+esc(title)+'</div><div class="sr-meta">'+type+' · '+status+'</div></div></div>';}).join('');}catch(err){results.innerHTML='<div class="sr-msg" style="color:var(--accent)">Error: '+esc(err.message)+'</div>';}},600);}
 async function selectMD(info){document.getElementById('f-title').value=info.title;checkDuplicate(info.title);
   // Warn if this MangaDex ID is already in the library under a different title
   const existingMdId = lib.find(m => m.mdId === info.id && m.id !== editId);
@@ -3640,6 +3713,9 @@ function openDetail(id) {
   const actions = document.getElementById('detail-actions');
   actions.innerHTML = '<button class="btn btn-outline btn-sm" onclick="plusOne(\''+m.id+'\');closeDetail()">+1 Ch.</button>'
     +'<button class="btn btn-outline btn-sm" onclick="markRead(\''+m.id+'\');closeDetail()">✓ Mark Read</button>'
+    +(m.chLatest > 0 && (m.chRead||0) < m.chLatest
+      ? '<button class="btn btn-primary btn-sm" onclick="markRead(\''+m.id+'\');closeDetail()" title="Set to Ch.'+m.chLatest+'">⤊ Up to Ch.'+m.chLatest+'</button>'
+      : '')
     +'<button class="btn btn-outline btn-sm" onclick="closeDetail();openEdit(\''+m.id+'\')">✎ Edit</button>'
     +(m.mdId?'<a class="btn btn-outline btn-sm" href="https://mangadex.org/title/'+esc(m.mdId)+'" target="_blank" rel="noopener">↗ MangaDex</a>':'')
     +(m.customUrl?'<a class="btn btn-outline btn-sm" href="'+esc(m.customUrl)+'" target="_blank" rel="noopener">↗ Source</a>':'');
@@ -3784,13 +3860,19 @@ async function importAniList() {
 // ─────────────────────────────────────────────────────────────────────────────
 // EVENT LISTENERS
 // ─────────────────────────────────────────────────────────────────────────────
+// Modals defined before this script block — safe to attach immediately
 document.getElementById('modal').addEventListener('click',       e=>{ if(e.target===e.currentTarget) closeModal(); });
 document.getElementById('import-modal').addEventListener('click',e=>{ if(e.target===e.currentTarget) closeImport(); });
 document.getElementById('export-modal').addEventListener('click',e=>{ if(e.target===e.currentTarget) closeExport(); });
 document.getElementById('collections-modal').addEventListener('click', e=>{ if(e.target===e.currentTarget) closeCollectionsManager(); });
 document.getElementById('detail-modal').addEventListener('click', e=>{ if(e.target===e.currentTarget) closeDetail(); });
-document.getElementById('settings-modal').addEventListener('click', e=>{ if(e.target===e.currentTarget) closeSettings(); });
-document.getElementById('debuglog-modal').addEventListener('click', e=>{ if(e.target===e.currentTarget) closeDebugLog(); });
+// settings-modal and debuglog-modal are defined after this script block — defer until DOM is ready
+document.addEventListener('DOMContentLoaded', () => {
+  const sm = document.getElementById('settings-modal');
+  if (sm) sm.addEventListener('click', e=>{ if(e.target===e.currentTarget) closeSettings(); });
+  const dm = document.getElementById('debuglog-modal');
+  if (dm) dm.addEventListener('click', e=>{ if(e.target===e.currentTarget) closeDebugLog(); });
+});
 document.addEventListener('click', e => {
   const r = document.getElementById('md-results');
   if (r && !r.contains(e.target) && e.target.id !== 'md-search') r.classList.remove('open');
@@ -3817,14 +3899,7 @@ window.addEventListener('beforeunload', () => {
           'Authorization': 'Bearer ' + token,
           'Prefer': 'resolution=merge-duplicates'
         },
-        body: JSON.stringify({
-          id: uid,
-          lib: JSON.stringify(window._lib),
-          log: JSON.stringify((window._log || []).slice(0, 100)),
-          collections: JSON.stringify(window._collections || []),
-          updated_at: Date.now(),
-          last_check: window._lastCheckTime || 0
-        })
+        body: _buildSaveBody(uid)  // includes proxy_prefs — was missing before
       });
     } catch(e) {}
   }
@@ -3859,7 +3934,7 @@ document.addEventListener('visibilitychange', async () => {
         const logMap = new Map();
         [...(window._log || []), ...cloud.log].forEach(u => { if (!logMap.has(u.id)) logMap.set(u.id, u); });
         window._lib = merged;
-        window._log = [...logMap.values()].sort((a,b) => b.time - a.time).slice(0, 100);
+        window._log = [...logMap.values()].sort((a,b) => b.time - a.time).slice(0, LOG_CAP);
         if (cloud.collections?.length) window._collections = cloud.collections;
         window.renderLib && window.renderLib();
         window.renderLog && window.renderLog();
