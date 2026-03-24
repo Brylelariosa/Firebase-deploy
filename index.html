@@ -502,11 +502,12 @@ header { padding:14px 0 12px; border-bottom:1px solid var(--border); display:fle
 .search-wrap input:focus { border-color:var(--accent); }
 .search-wrap input::placeholder { color:var(--muted); }
 .search-icon { position:absolute; left:10px; top:50%; transform:translateY(-50%); color:var(--muted); font-size:13px; pointer-events:none; }
-.filter-row { display:flex; gap:6px; align-items:center; overflow-x:auto; -webkit-overflow-scrolling:touch; scrollbar-width:none; padding-bottom:2px; }
+.filter-row-wrap { display:flex; align-items:center; gap:6px; }
+.filter-row { display:flex; gap:6px; align-items:center; overflow-x:auto; -webkit-overflow-scrolling:touch; scrollbar-width:none; padding-bottom:2px; flex:1; min-width:0; }
 .filter-row::-webkit-scrollbar { display:none; }
 .flt { background:var(--surface); border:1px solid var(--border); color:var(--text); padding:7px 8px; font-family:'DM Mono',monospace; font-size:9px; outline:none; cursor:pointer; letter-spacing:.5px; flex-shrink:0; -webkit-appearance:none; appearance:none; min-width:0; }
 .flt:focus { border-color:var(--accent); }
-.layout-btns { display:flex; gap:3px; flex-shrink:0; margin-left:auto; }
+.layout-btns { display:flex; gap:3px; flex-shrink:0; }
 .layout-btn { background:var(--surface); border:1px solid var(--border); color:var(--muted); font-family:'DM Mono',monospace; font-size:13px; padding:7px 10px; cursor:pointer; transition:all .2s; display:flex; align-items:center; justify-content:center; }
 .layout-btn.active { border-color:var(--accent3); color:var(--accent3); background:rgba(0,210,211,.08); }
 
@@ -921,36 +922,38 @@ body.detail-open { overflow:hidden;position:fixed;width:100%; }
         <span class="search-icon">⌕</span>
         <input type="search" id="q" placeholder="Filter library..." oninput="filterLib()" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
       </div>
-      <div class="filter-row">
-        <select class="flt" id="flt-type" onchange="filterLib()">
-          <option value="">All Types</option>
-          <option value="manga">Manga</option>
-          <option value="manhua">Manhua</option>
-          <option value="manhwa">Manhwa</option>
-        </select>
-        <select class="flt" id="flt-status" onchange="filterLib()">
-          <option value="">All Status</option>
-          <option value="has-new">🆕 New Chapter</option>
-          <option value="reading">Reading</option>
-          <option value="completed">Completed</option>
-          <option value="on-hold">On Hold</option>
-          <option value="dropped">Dropped</option>
-          <option value="plan">Plan to Read</option>
-        </select>
-        <select class="flt" id="flt-sort" onchange="filterLib()">
-          <option value="default">Default</option>
-          <option value="title">A–Z</option>
-          <option value="title-desc">Z–A</option>
-          <option value="behind">Most Behind</option>
-          <option value="latest">Latest Ch.</option>
-          <option value="added">Recently Added</option>
-          <option value="newest-update">Newest Update</option>
-          <option value="updated">Last Updated</option>
-          <option value="found">Last Found</option>
-        </select>
-        <select class="flt" id="flt-collection" onchange="filterLib()">
-          <option value="">All Collections</option>
-        </select>
+      <div class="filter-row-wrap">
+        <div class="filter-row">
+          <select class="flt" id="flt-type" onchange="filterLib()">
+            <option value="">All Types</option>
+            <option value="manga">Manga</option>
+            <option value="manhua">Manhua</option>
+            <option value="manhwa">Manhwa</option>
+          </select>
+          <select class="flt" id="flt-status" onchange="filterLib()">
+            <option value="">All Status</option>
+            <option value="has-new">🆕 New Chapter</option>
+            <option value="reading">Reading</option>
+            <option value="completed">Completed</option>
+            <option value="on-hold">On Hold</option>
+            <option value="dropped">Dropped</option>
+            <option value="plan">Plan to Read</option>
+          </select>
+          <select class="flt" id="flt-sort" onchange="filterLib()">
+            <option value="default">Default</option>
+            <option value="title">A–Z</option>
+            <option value="title-desc">Z–A</option>
+            <option value="behind">Most Behind</option>
+            <option value="latest">Latest Ch.</option>
+            <option value="added">Recently Added</option>
+            <option value="newest-update">Newest Update</option>
+            <option value="updated">Last Updated</option>
+            <option value="found">Last Found</option>
+          </select>
+          <select class="flt" id="flt-collection" onchange="filterLib()">
+            <option value="">All Collections</option>
+          </select>
+        </div>
         <div class="layout-btns">
           <button class="layout-btn active" id="layout-2col" onclick="setLayout('2col')" title="2 columns">▦</button>
           <button class="layout-btn" id="layout-1col" onclick="setLayout('1col')" title="1 column">▤</button>
@@ -3745,18 +3748,16 @@ async function importAniList() {
 // ─────────────────────────────────────────────────────────────────────────────
 // EVENT LISTENERS
 // ─────────────────────────────────────────────────────────────────────────────
-document.addEventListener('DOMContentLoaded', () => {
-  document.getElementById('modal').addEventListener('click',       e=>{ if(e.target===e.currentTarget) closeModal(); });
-  document.getElementById('import-modal').addEventListener('click',e=>{ if(e.target===e.currentTarget) closeImport(); });
-  document.getElementById('export-modal').addEventListener('click',e=>{ if(e.target===e.currentTarget) closeExport(); });
-  document.getElementById('collections-modal').addEventListener('click', e=>{ if(e.target===e.currentTarget) closeCollectionsManager(); });
-  document.getElementById('detail-modal').addEventListener('click', e=>{ if(e.target===e.currentTarget) closeDetail(); });
-  document.getElementById('settings-modal').addEventListener('click', e=>{ if(e.target===e.currentTarget) closeSettings(); });
-  document.getElementById('debuglog-modal').addEventListener('click', e=>{ if(e.target===e.currentTarget) closeDebugLog(); });
-  document.addEventListener('click', e => {
-    const r = document.getElementById('md-results');
-    if (r && !r.contains(e.target) && e.target.id !== 'md-search') r.classList.remove('open');
-  });
+document.getElementById('modal').addEventListener('click',       e=>{ if(e.target===e.currentTarget) closeModal(); });
+document.getElementById('import-modal').addEventListener('click',e=>{ if(e.target===e.currentTarget) closeImport(); });
+document.getElementById('export-modal').addEventListener('click',e=>{ if(e.target===e.currentTarget) closeExport(); });
+document.getElementById('collections-modal').addEventListener('click', e=>{ if(e.target===e.currentTarget) closeCollectionsManager(); });
+document.getElementById('detail-modal').addEventListener('click', e=>{ if(e.target===e.currentTarget) closeDetail(); });
+document.getElementById('settings-modal').addEventListener('click', e=>{ if(e.target===e.currentTarget) closeSettings(); });
+document.getElementById('debuglog-modal').addEventListener('click', e=>{ if(e.target===e.currentTarget) closeDebugLog(); });
+document.addEventListener('click', e => {
+  const r = document.getElementById('md-results');
+  if (r && !r.contains(e.target) && e.target.id !== 'md-search') r.classList.remove('open');
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
