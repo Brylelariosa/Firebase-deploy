@@ -564,7 +564,6 @@ header { padding:14px 0 12px; border-bottom:1px solid var(--border); display:fle
 .health-dot.err { background:#f55; }
 .health-dot.stale { background:var(--accent2); }
 .health-dot.none { display:none; }
-.archived-badge { display:inline-block; font-size:8px; color:var(--muted); opacity:.6; letter-spacing:.5px; padding:1px 4px; border:1px solid var(--border); margin-left:4px; }
 .behind-badge { font-size:8px; color:var(--accent2); letter-spacing:.5px; margin-left:3px; }
 .cr-badge { font-size:7px; font-weight:700; padding:1px 4px; border-radius:2px; margin-left:3px; vertical-align:middle; }
 .cr-suggestive { background:rgba(255,159,67,.2); color:var(--accent2); }
@@ -934,7 +933,6 @@ body.detail-open { overflow:hidden;position:fixed;width:100%; }
     <div class="stat"><div class="stat-val c2" id="s-new">0</div><div class="stat-label">New Chapters</div></div>
     <div class="stat"><div class="stat-val c3" id="s-reading">0</div><div class="stat-label">Reading</div></div>
     <div class="stat"><div class="stat-val c4" id="s-completed">0</div><div class="stat-label">Completed</div></div>
-    <div class="stat" id="stat-archived" style="display:none"><div class="stat-val" style="color:var(--muted)" id="s-archived">0</div><div class="stat-label">Archived</div></div>
   </div>
 
   <div class="tabs">
@@ -965,7 +963,6 @@ body.detail-open { overflow:hidden;position:fixed;width:100%; }
             <option value="on-hold">On Hold</option>
             <option value="dropped">Dropped</option>
             <option value="plan">Plan to Read</option>
-            <option value="archived">📦 Archived</option>
           </select>
           <select class="flt" id="flt-sort" onchange="filterLib()">
             <option value="default">Default</option>
@@ -1517,7 +1514,7 @@ function switchDbgTab(tab) {
 function renderUrlWarnings() {
   const panel = document.getElementById('dbglog-urls');
   if (!panel) return;
-  const problems = (window._lib || []).filter(m => m.customUrl && m.scrapeOk === false && !m.archived);
+  const problems = (window._lib || []).filter(m => m.customUrl && m.scrapeOk === false);
   if (!problems.length) {
     panel.innerHTML = '<div style="color:var(--muted);font-size:10px;padding:24px;text-align:center;letter-spacing:.5px">No URL failures in last run ✓</div>';
     return;
@@ -1570,18 +1567,17 @@ function openSettings() {
   const avatarEl = document.getElementById('settings-avatar');
   if (avatarEl) avatarEl.textContent = email && email !== '—' ? email[0].toUpperCase() : '?';
   const lib = window._lib || [];
-  const active = lib.filter(m => !m.archived);
   const libCount = document.getElementById('settings-lib-count');
-  if (libCount) libCount.textContent = active.length.toLocaleString();
+  if (libCount) libCount.textContent = lib.length.toLocaleString();
   const chReadEl = document.getElementById('settings-ch-read');
   if (chReadEl) {
-    const total = active.reduce((sum, m) => sum + (m.chRead || 0), 0);
+    const total = lib.reduce((sum, m) => sum + (m.chRead || 0), 0);
     chReadEl.textContent = total.toLocaleString();
   }
   const newCountEl = document.getElementById('settings-new-count');
-  if (newCountEl) newCountEl.textContent = active.filter(m => m.hasNew).length.toLocaleString();
+  if (newCountEl) newCountEl.textContent = lib.filter(m => m.hasNew).length.toLocaleString();
   const completedEl = document.getElementById('settings-completed-count');
-  if (completedEl) completedEl.textContent = active.filter(m => m.readingStatus === 'completed').length.toLocaleString();
+  if (completedEl) completedEl.textContent = lib.filter(m => m.readingStatus === 'completed').length.toLocaleString();
   const themeLbl = document.getElementById('settings-theme-lbl');
   if (themeLbl) themeLbl.textContent = document.body.classList.contains('light') ? 'Light' : 'Dark';
   // Highlight active layout buttons
@@ -2892,11 +2888,6 @@ async function refreshOne(id) {
         updLog.unshift({ id:uid(), mangaId:m.id, title:m.title, type:m.type, oldCh:prev, newCh:next, source:r.source, cover:m.cover||'', time:nowTs, read:false });
         saveLog();
       }
-      // Auto-archive check
-      if (!m.archived && m.seriesStatus === 'completed' && m.readingStatus === 'completed' && next > 0 && (m.chRead||0) >= next) {
-        m.archived = true;
-        showToast(m.title + ' auto-archived (series complete) ✓');
-      }
       saveLib(); renderLib();
       showToast(m.title + ' → Ch.' + next + ' ✓');
     } else {
@@ -2953,9 +2944,6 @@ async function checkAllUpdates() {
   }
   const tracked = lib.filter(m => {
     if (!(m.mdId || m.customUrl)) return false;
-    if (m.archived) return false;
-    if (m.seriesStatus === 'completed' && m.readingStatus === 'completed'
-        && m.chLatest > 0 && (m.chRead || 0) >= m.chLatest) return false;
     return true;
   });
   if (!tracked.length) { showToast('Add manga with a MangaDex ID or Custom URL first!', 'err'); return; }
@@ -3017,9 +3005,6 @@ async function checkAllUpdates() {
         } else {
           const avgMs = m.avgUpdateIntervalMs || (7 * 24 * 60 * 60 * 1000);
           m.nextCheckAt = Date.now() + Math.max(avgMs - 2 * 24 * 60 * 60 * 1000, 6 * 60 * 60 * 1000);
-        }
-        if (!m.archived && m.seriesStatus === 'completed' && m.readingStatus === 'completed' && next > 0 && (m.chRead||0) >= next) {
-          m.archived = true;
         }
         saveLib(); renderLib();
       } else {
@@ -3088,7 +3073,7 @@ async function checkAllUpdates() {
     if (window._fbUser) window._fbSave && window._fbSave();
     window._debugActive = false;
     // Update URL warnings badge on debug tab
-    const urlFails = (window._lib||[]).filter(m => m.customUrl && m.scrapeOk === false && !m.archived);
+    const urlFails = (window._lib||[]).filter(m => m.customUrl && m.scrapeOk === false);
     const urlTab = document.getElementById('dbg-tab-urls');
     if (urlTab) urlTab.textContent = urlFails.length ? '⚠ URL WARNINGS (' + urlFails.length + ')' : '⚠ URL WARNINGS';
     _dlog('DONE', 'Check complete', { found, done, failed: (window._lib||[]).filter(m=>m.scrapeOk===false).length });
@@ -3117,11 +3102,8 @@ window.renderLib = function() {
   let items = lib.filter(m => {
     if (q && !m.title.toLowerCase().includes(q)) return false;
     if (ft && m.type !== ft) return false;
-    // Archived filter: show archived only when explicitly selected; hide from all other views
-    if (fs === 'archived') { if (!m.archived) return false; }
-    else if (m.archived) return false; // hide archived from all non-archived views
     if (fs === 'has-new') { if (!(m.hasNew && (m.chLatest||0) > (m.chRead||0))) return false; }
-    else if (fs && fs !== 'archived' && m.readingStatus !== fs) return false;
+    else if (fs && m.readingStatus !== fs) return false;
     if (fc && !(m.collections||[]).includes(fc)) return false;
     return true;
   });
@@ -3182,7 +3164,7 @@ window.renderLib = function() {
             +'<div class=\"ch-latest'+(hasNew?' new':'')+'\">'+'Latest: '+(m.chLatest>0?'Ch.'+m.chLatest:'?')+(hasNew?' ↑':'')+'</div>'
           +'</div>'
           +'<div class=\"card-actions\">'
-            +(m.archived ? '<button class=\"icon-btn\" title=\"Restore from archive\" onclick=\"unarchive(\'' + m.id + '\')\" style=\"color:var(--accent2)\">↩</button>' : '<button class=\"plus-one\" title=\"+1 chapter\" onclick=\"plusOne(\''+m.id+'\')\">+1</button>')
+            +'<button class=\"plus-one\" title=\"+1 chapter\" onclick=\"plusOne(\''+m.id+'\')\">+1</button>'
             +'<button class=\"icon-btn\" title=\"Mark all read\" onclick=\"markRead(\''+m.id+'\')\">✓</button>'
             +'<button class=\"icon-btn\" title=\"Refresh\" onclick=\"refreshOne(\''+m.id+'\')\">↻</button>'
             +'<button class=\"icon-btn\" title=\"Edit\" onclick=\"openEdit(\''+m.id+'\')\">✎</button>'
@@ -3273,16 +3255,10 @@ function postProcessCards() {
 window.updateStats = function() {
   const el = id => document.getElementById(id);
   if (!el('s-total')) return;
-  const active = lib.filter(m => !m.archived);
-  el('s-total').textContent     = active.length;
-  el('s-new').textContent       = active.filter(m => m.hasNew && (m.chLatest||0) > (m.chRead||0)).length;
-  el('s-reading').textContent   = active.filter(m => m.readingStatus === 'reading').length;
-  el('s-completed').textContent = active.filter(m => m.readingStatus === 'completed').length;
-  const archived = lib.filter(m => m.archived).length;
-  const archEl = el('s-archived');
-  if (archEl) archEl.textContent = archived;
-  const archStat = el('stat-archived');
-  if (archStat) archStat.style.display = archived > 0 ? '' : 'none';
+  el('s-total').textContent     = lib.length;
+  el('s-new').textContent       = lib.filter(m => m.hasNew && (m.chLatest||0) > (m.chRead||0)).length;
+  el('s-reading').textContent   = lib.filter(m => m.readingStatus === 'reading').length;
+  el('s-completed').textContent = lib.filter(m => m.readingStatus === 'completed').length;
   const unread = updLog.filter(u => !u.read).length;
   const badge = el('upd-badge');
   if (badge) { badge.style.display = unread ? 'inline' : 'none'; badge.textContent = unread; }
@@ -3315,12 +3291,6 @@ function markRead(id) {
   if (m.chLatest > 0 && m.chLatest > (m.chRead||0)) { m.chRead = m.chLatest; m.hasNew = false; saveLib(); renderLib(); showToast('Marked Ch.'+m.chLatest+' as read ✓'); }
   else if (!m.chLatest) showToast('Hit Refresh or Check Updates first', 'err');
   else showToast('Already up to date!');
-}
-function unarchive(id) {
-  const m = lib.find(x => x.id === id); if (!m) return;
-  m.archived = false;
-  saveLib(); renderLib();
-  showToast('"' + m.title + '" restored from archive ✓');
 }
 function del(id) {
   const m = lib.find(x => x.id === id); if (!m) return;
@@ -3480,7 +3450,7 @@ async function selectMD(info){document.getElementById('f-title').value=info.titl
 // ─────────────────────────────────────────────────────────────────────────────
 function openImport(){importQueue=[];document.getElementById('import-modal').classList.add('open');document.body.style.overflow='hidden';document.getElementById('import-footer').style.display='none';document.getElementById('paste-input').value='';document.getElementById('bulk-input').value='';document.getElementById('paste-preview').innerHTML='';document.getElementById('file-preview').innerHTML='';document.getElementById('mal-preview').innerHTML='';document.getElementById('mal-progress').style.display='none';switchIETab('paste');}
 function closeImport(){document.getElementById('import-modal').classList.remove('open');document.body.style.overflow='';}
-function openExport(){document.getElementById('export-count').textContent=lib.length;const preview=lib.map(m=>({title:m.title,type:m.type,readingStatus:m.readingStatus,chRead:m.chRead,chLatest:m.chLatest,mdId:m.mdId||'',customUrl:m.customUrl||'',chSource:m.chSource||'',seriesStatus:m.seriesStatus||'ongoing',cover:m.cover||'',contentRating:m.contentRating||'safe',archived:m.archived||false,scrapeOk:m.scrapeOk??null,scrapeAt:m.scrapeAt||0,lastUpdated:m.lastUpdated||0,addedAt:m.addedAt||0}));document.getElementById('export-preview').value=JSON.stringify(preview,null,2);document.getElementById('export-modal').classList.add('open');document.body.style.overflow='hidden';}
+function openExport(){document.getElementById('export-count').textContent=lib.length;const preview=lib.map(m=>({title:m.title,type:m.type,readingStatus:m.readingStatus,chRead:m.chRead,chLatest:m.chLatest,mdId:m.mdId||'',customUrl:m.customUrl||'',chSource:m.chSource||'',seriesStatus:m.seriesStatus||'ongoing',cover:m.cover||'',contentRating:m.contentRating||'safe',scrapeOk:m.scrapeOk??null,scrapeAt:m.scrapeAt||0,lastUpdated:m.lastUpdated||0,addedAt:m.addedAt||0}));document.getElementById('export-preview').value=JSON.stringify(preview,null,2);document.getElementById('export-modal').classList.add('open');document.body.style.overflow='hidden';}
 function closeExport(){document.getElementById('export-modal').classList.remove('open');document.body.style.overflow='';}
 function switchIETab(name){currentIETab=name;document.querySelectorAll('.ie-tab').forEach((t,i)=>t.classList.toggle('active',['paste','file','bulk','mal'][i]===name));document.querySelectorAll('.ie-panel').forEach(p=>p.classList.remove('active'));document.getElementById('ie-'+name).classList.add('active');}
 function switchMALSubtab(name){['mal','al'].forEach(n=>{document.getElementById('mal-subtab-'+n).classList.toggle('active',n===name);document.getElementById('mal-panel-'+n).style.display=n===name?'flex':'none';});}
@@ -3513,7 +3483,6 @@ async function doImport(){
       chSource:item.chSource||(item.customUrl?'Custom URL':'MangaDex'),
       hasNew:(item.chLatest||0)>(item.chRead||0),
       contentRating:item.contentRating||'safe',
-      archived:item.archived||false,
       scrapeOk:item.scrapeOk??null,scrapeAt:item.scrapeAt||0,
       lastUpdated:item.lastUpdated||0,addedAt:item.addedAt||Date.now()
     });
@@ -3528,7 +3497,6 @@ async function doImport(){
       chSource:item.chSource||'Custom URL',
       hasNew:(item.chLatest||0)>(item.chRead||0),
       contentRating:item.contentRating||'safe',
-      archived:item.archived||false,
       scrapeOk:item.scrapeOk??null,scrapeAt:item.scrapeAt||0,
       lastUpdated:item.lastUpdated||0,addedAt:item.addedAt||Date.now()
     });
@@ -3617,7 +3585,7 @@ async function bulkMDImport(){const raw=document.getElementById('bulk-input').va
   } else { prog.textContent='✓ Done! Added '+added+' manga.'; }
   showToast('Bulk imported '+added+' manga ✓');
   setTimeout(()=>{if(added>0)closeImport();},1200);}
-function exportJSON(){const data=lib.map(m=>({title:m.title,type:m.type,readingStatus:m.readingStatus,chRead:m.chRead||0,chLatest:m.chLatest||0,mdId:m.mdId||'',customUrl:m.customUrl||'',chSource:m.chSource||'',seriesStatus:m.seriesStatus||'ongoing',cover:cleanCoverUrl(m.cover||''),contentRating:m.contentRating||'safe',archived:m.archived||false,scrapeOk:m.scrapeOk??null,scrapeAt:m.scrapeAt||0,lastUpdated:m.lastUpdated||0,addedAt:m.addedAt||0}));downloadFile('mangatrack-library.json',JSON.stringify(data,null,2),'application/json');showToast('JSON exported ✓');}
+function exportJSON(){const data=lib.map(m=>({title:m.title,type:m.type,readingStatus:m.readingStatus,chRead:m.chRead||0,chLatest:m.chLatest||0,mdId:m.mdId||'',customUrl:m.customUrl||'',chSource:m.chSource||'',seriesStatus:m.seriesStatus||'ongoing',cover:cleanCoverUrl(m.cover||''),contentRating:m.contentRating||'safe',scrapeOk:m.scrapeOk??null,scrapeAt:m.scrapeAt||0,lastUpdated:m.lastUpdated||0,addedAt:m.addedAt||0}));downloadFile('mangatrack-library.json',JSON.stringify(data,null,2),'application/json');showToast('JSON exported ✓');}
 function exportCSV(){const header='title,type,readingStatus,chRead,chLatest,mdId,seriesStatus';const rows=lib.map(m=>[m.title,m.type,m.readingStatus,m.chRead||0,m.chLatest||0,m.mdId||'',m.seriesStatus||'ongoing'].map(v=>'"'+String(v).replace(/"/g,'""')+'"').join(','));downloadFile('mangatrack-library.csv',[header,...rows].join('\n'),'text/csv');showToast('CSV exported ✓');}
 function exportText(){downloadFile('mangatrack-library.txt',lib.map(m=>m.title+' (Ch.'+(m.chRead||0)+'/'+(m.chLatest||'?')+')').join('\n'),'text/plain');showToast('Text list exported ✓');}
 function downloadFile(name,content,mime){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([content],{type:mime}));a.download=name;a.click();URL.revokeObjectURL(a.href);}
