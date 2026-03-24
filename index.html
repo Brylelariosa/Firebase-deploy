@@ -502,10 +502,9 @@ header { padding:14px 0 12px; border-bottom:1px solid var(--border); display:fle
 .search-wrap input:focus { border-color:var(--accent); }
 .search-wrap input::placeholder { color:var(--muted); }
 .search-icon { position:absolute; left:10px; top:50%; transform:translateY(-50%); color:var(--muted); font-size:13px; pointer-events:none; }
-.filter-row-wrap { display:flex; align-items:center; gap:6px; }
-.filter-row { display:flex; gap:6px; align-items:center; overflow-x:auto; -webkit-overflow-scrolling:touch; scrollbar-width:none; padding-bottom:2px; flex:1; min-width:0; }
-.filter-row::-webkit-scrollbar { display:none; }
-.flt { background:var(--surface); border:1px solid var(--border); color:var(--text); padding:7px 8px; font-family:'DM Mono',monospace; font-size:9px; outline:none; cursor:pointer; letter-spacing:.5px; flex-shrink:0; -webkit-appearance:none; appearance:none; min-width:0; }
+.filter-row-wrap { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+.filter-row { display:flex; gap:6px; align-items:center; flex-wrap:wrap; flex:1; min-width:0; }
+.flt { background:var(--surface); border:1px solid var(--border); color:var(--text); padding:7px 8px; font-family:'DM Mono',monospace; font-size:9px; outline:none; cursor:pointer; letter-spacing:.5px; flex:1; min-width:80px; -webkit-appearance:none; appearance:none; }
 .flt:focus { border-color:var(--accent); }
 .layout-btns { display:flex; gap:3px; flex-shrink:0; }
 .layout-btn { background:var(--surface); border:1px solid var(--border); color:var(--muted); font-family:'DM Mono',monospace; font-size:13px; padding:7px 10px; cursor:pointer; transition:all .2s; display:flex; align-items:center; justify-content:center; }
