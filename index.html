@@ -910,7 +910,6 @@ body.detail-open { overflow:hidden;position:fixed;width:100%; }
           <button class="overflow-item" onclick="openExport();closeOverflowMenu()">⬇ Export</button>
           <button class="overflow-item" onclick="openCollectionsManager();closeOverflowMenu()">🗂 Collections</button>
           <button class="overflow-item" onclick="openDebugLog();closeOverflowMenu()" style="color:var(--accent3)">🔧 Check Log</button>
-          <button class="overflow-item" onclick="openSettings();closeOverflowMenu()" style="color:var(--muted)">⚙ Settings</button>
         </div>
       </div>
       <div class="account-pill" onclick="openSettings()" title="Account &amp; Settings" style="cursor:pointer">
@@ -3841,6 +3840,30 @@ document.addEventListener('visibilitychange', async () => {
         setSyncDot(ok === false ? 'err' : 'ok');
       }
     }
+  } else if (document.visibilityState === 'visible') {
+    // Re-sync from cloud when tab comes back into focus — catches any
+    // changes made on another device while this tab was in the background
+    // (realtime WebSocket may have dropped or missed events).
+    const uid = window._fbUser?.id;
+    if (!uid) return;
+    setSyncDot('syncing');
+    try {
+      const cloud = await cloudLoad(uid);
+      if (cloud && cloud.lib.length > 0) {
+        const merged = _mergeLibs(window._lib || [], cloud.lib);
+        const addedCount = merged.length - (window._lib || []).length;
+        const logMap = new Map();
+        [...(window._log || []), ...cloud.log].forEach(u => { if (!logMap.has(u.id)) logMap.set(u.id, u); });
+        window._lib = merged;
+        window._log = [...logMap.values()].sort((a,b) => b.time - a.time).slice(0, 100);
+        if (cloud.collections?.length) window._collections = cloud.collections;
+        window.renderLib && window.renderLib();
+        window.renderLog && window.renderLog();
+        window.updateStats && window.updateStats();
+        if (addedCount > 0) window.showToast && window.showToast('↻ Synced — ' + addedCount + ' new manga added');
+      }
+      setSyncDot('ok');
+    } catch(e) { setSyncDot('err'); }
   }
 });
 
