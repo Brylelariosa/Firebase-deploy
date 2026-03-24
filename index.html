@@ -711,33 +711,34 @@ header { padding:14px 0 12px; border-bottom:1px solid var(--border); display:fle
 }
 
 /* ── SETTINGS MODAL ─────────────────────────────────────── */
-.settings-section { padding:18px 22px; border-bottom:1px solid var(--border); }
-.settings-section:last-child { border-bottom:none; padding-bottom:22px; }
-.settings-section-title { font-size:8px;letter-spacing:3px;text-transform:uppercase;color:var(--accent3);margin-bottom:14px;font-weight:700; }
-.settings-row { display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px; }
+.settings-section { padding:20px 22px; border-bottom:1px solid var(--border); }
+.settings-section:last-child { border-bottom:none; padding-bottom:24px; }
+.settings-section-title { font-size:8px;letter-spacing:3px;text-transform:uppercase;color:var(--accent3);margin-bottom:16px;font-weight:700; }
+.settings-row { display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px; }
 .settings-row:last-child { margin-bottom:0; }
 .settings-label { font-size:11px;color:var(--text);letter-spacing:.3px; }
 .settings-val { font-size:10px;color:var(--muted);letter-spacing:.5px;word-break:break-all;text-align:right;max-width:60%; }
 /* Account pill */
-.settings-account-box { background:var(--surface);border:1px solid var(--border);border-radius:2px;padding:12px 14px;display:flex;align-items:center;gap:12px;margin-bottom:12px; }
-.settings-avatar { width:36px;height:36px;border-radius:50%;background:linear-gradient(135deg,var(--accent),var(--accent3));display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;color:#fff;flex-shrink:0; }
+.settings-account-box { background:var(--surface);border:1px solid var(--border);padding:14px 16px;display:flex;align-items:center;gap:14px;margin-bottom:14px; }
+.settings-avatar { width:40px;height:40px;border-radius:50%;background:linear-gradient(135deg,var(--accent),var(--accent3));display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:700;color:#fff;flex-shrink:0; }
 .settings-account-info { flex:1;min-width:0; }
 .settings-account-label { font-size:8px;letter-spacing:2px;text-transform:uppercase;color:var(--muted); }
-.settings-account-email { font-size:11px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:2px; }
+.settings-account-email { font-size:12px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:3px; }
 /* Stats grid */
-.settings-stats { display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px; }
-.settings-stat { background:var(--surface);border:1px solid var(--border);padding:12px 14px; }
-.settings-stat-val { font-size:20px;font-family:'Bebas Neue',sans-serif;letter-spacing:1px;color:var(--accent3);line-height:1; }
-.settings-stat-lbl { font-size:8px;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted);margin-top:4px; }
-/* Toggle button group */
-.settings-btn-group { display:flex;gap:0; }
-.settings-btn-group .btn { border-radius:0;font-size:9px;padding:7px 14px; }
-.settings-btn-group .btn:first-child { border-right:none; }
+.settings-stats { display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:0; }
+.settings-stat { background:var(--surface);border:1px solid var(--border);padding:14px 16px;transition:border-color .2s; }
+.settings-stat:hover { border-color:var(--accent3); }
+.settings-stat-val { font-size:24px;font-family:'Bebas Neue',sans-serif;letter-spacing:1px;color:var(--accent3);line-height:1; }
+.settings-stat-lbl { font-size:8px;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted);margin-top:5px; }
+/* Toggle button group — each button keeps full border, gap separates them */
+.settings-btn-group { display:flex;gap:6px; }
+.settings-btn-group .btn { font-size:9px;padding:7px 16px;letter-spacing:1px; }
+.settings-btn-group .btn.active-layout { border-color:var(--accent3);color:var(--accent3);background:rgba(0,210,211,.08); }
 /* Action row */
-.settings-actions { display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-top:2px; }
-.settings-action-btn { background:var(--surface);border:1px solid var(--border);color:var(--text);font-family:'DM Mono',monospace;font-size:9px;letter-spacing:1px;padding:10px 6px;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:5px;transition:all .2s;text-transform:uppercase; }
-.settings-action-btn:hover { border-color:var(--accent3);color:var(--accent3); }
-.settings-action-btn .sab-icon { font-size:16px; }
+.settings-actions { display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:2px; }
+.settings-action-btn { background:var(--surface);border:1px solid var(--border);color:var(--text);font-family:'DM Mono',monospace;font-size:9px;letter-spacing:1px;padding:14px 6px;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:6px;transition:all .2s;text-transform:uppercase; }
+.settings-action-btn:hover { border-color:var(--accent3);color:var(--accent3);background:rgba(0,210,211,.05); }
+.settings-action-btn .sab-icon { font-size:18px; }
 .settings-action-btn.danger { color:var(--accent);border-color:var(--border); }
 .settings-action-btn.danger:hover { border-color:var(--accent); }
 
@@ -910,7 +911,6 @@ body.detail-open { overflow:hidden;position:fixed;width:100%; }
           <button class="overflow-item" onclick="openExport();closeOverflowMenu()">⬇ Export</button>
           <button class="overflow-item" onclick="openCollectionsManager();closeOverflowMenu()">🗂 Collections</button>
           <button class="overflow-item" onclick="openDebugLog();closeOverflowMenu()" style="color:var(--accent3)">🔧 Check Log</button>
-          <button class="overflow-item" onclick="openSettings();closeOverflowMenu()" style="color:var(--muted)">⚙ Settings</button>
         </div>
       </div>
       <div class="account-pill" onclick="openSettings()" title="Account &amp; Settings" style="cursor:pointer">
@@ -1566,7 +1566,10 @@ function openSettings() {
   const l = localStorage.getItem('mgt_layout') || '2col';
   ['2col','1col'].forEach(m => {
     const b = document.getElementById('set-' + m + '-btn');
-    if (b) b.style.borderColor = m === l ? 'var(--accent3)' : '';
+    if (b) {
+      b.classList.toggle('active-layout', m === l);
+      b.style.borderColor = '';
+    }
   });
 }
 function closeSettings() {
@@ -3841,6 +3844,30 @@ document.addEventListener('visibilitychange', async () => {
         setSyncDot(ok === false ? 'err' : 'ok');
       }
     }
+  } else if (document.visibilityState === 'visible') {
+    // Re-sync from cloud when tab comes back into focus — catches any
+    // changes made on another device while this tab was in the background
+    // (realtime WebSocket may have dropped or missed events).
+    const uid = window._fbUser?.id;
+    if (!uid) return;
+    setSyncDot('syncing');
+    try {
+      const cloud = await cloudLoad(uid);
+      if (cloud && cloud.lib.length > 0) {
+        const merged = _mergeLibs(window._lib || [], cloud.lib);
+        const addedCount = merged.length - (window._lib || []).length;
+        const logMap = new Map();
+        [...(window._log || []), ...cloud.log].forEach(u => { if (!logMap.has(u.id)) logMap.set(u.id, u); });
+        window._lib = merged;
+        window._log = [...logMap.values()].sort((a,b) => b.time - a.time).slice(0, 100);
+        if (cloud.collections?.length) window._collections = cloud.collections;
+        window.renderLib && window.renderLib();
+        window.renderLog && window.renderLog();
+        window.updateStats && window.updateStats();
+        if (addedCount > 0) window.showToast && window.showToast('↻ Synced — ' + addedCount + ' new manga added');
+      }
+      setSyncDot('ok');
+    } catch(e) { setSyncDot('err'); }
   }
 });
 
