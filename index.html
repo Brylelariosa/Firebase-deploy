@@ -711,13 +711,35 @@ header { padding:14px 0 12px; border-bottom:1px solid var(--border); display:fle
 }
 
 /* ── SETTINGS MODAL ─────────────────────────────────────── */
-.settings-section { border-bottom:1px solid var(--border);padding:16px 22px; }
-.settings-section:last-child { border-bottom:none; }
-.settings-section-title { font-size:8px;letter-spacing:2px;text-transform:uppercase;color:var(--muted);margin-bottom:12px; }
-.settings-row { display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px; }
+.settings-section { padding:18px 22px; border-bottom:1px solid var(--border); }
+.settings-section:last-child { border-bottom:none; padding-bottom:22px; }
+.settings-section-title { font-size:8px;letter-spacing:3px;text-transform:uppercase;color:var(--accent3);margin-bottom:14px;font-weight:700; }
+.settings-row { display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px; }
 .settings-row:last-child { margin-bottom:0; }
-.settings-label { font-size:10px;color:var(--text);letter-spacing:.5px; }
-.settings-val { font-size:9px;color:var(--muted);letter-spacing:.5px;word-break:break-all;text-align:right;max-width:55%; }
+.settings-label { font-size:11px;color:var(--text);letter-spacing:.3px; }
+.settings-val { font-size:10px;color:var(--muted);letter-spacing:.5px;word-break:break-all;text-align:right;max-width:60%; }
+/* Account pill */
+.settings-account-box { background:var(--surface);border:1px solid var(--border);border-radius:2px;padding:12px 14px;display:flex;align-items:center;gap:12px;margin-bottom:12px; }
+.settings-avatar { width:36px;height:36px;border-radius:50%;background:linear-gradient(135deg,var(--accent),var(--accent3));display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;color:#fff;flex-shrink:0; }
+.settings-account-info { flex:1;min-width:0; }
+.settings-account-label { font-size:8px;letter-spacing:2px;text-transform:uppercase;color:var(--muted); }
+.settings-account-email { font-size:11px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:2px; }
+/* Stats grid */
+.settings-stats { display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px; }
+.settings-stat { background:var(--surface);border:1px solid var(--border);padding:12px 14px; }
+.settings-stat-val { font-size:20px;font-family:'Bebas Neue',sans-serif;letter-spacing:1px;color:var(--accent3);line-height:1; }
+.settings-stat-lbl { font-size:8px;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted);margin-top:4px; }
+/* Toggle button group */
+.settings-btn-group { display:flex;gap:0; }
+.settings-btn-group .btn { border-radius:0;font-size:9px;padding:7px 14px; }
+.settings-btn-group .btn:first-child { border-right:none; }
+/* Action row */
+.settings-actions { display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-top:2px; }
+.settings-action-btn { background:var(--surface);border:1px solid var(--border);color:var(--text);font-family:'DM Mono',monospace;font-size:9px;letter-spacing:1px;padding:10px 6px;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:5px;transition:all .2s;text-transform:uppercase; }
+.settings-action-btn:hover { border-color:var(--accent3);color:var(--accent3); }
+.settings-action-btn .sab-icon { font-size:16px; }
+.settings-action-btn.danger { color:var(--accent);border-color:var(--border); }
+.settings-action-btn.danger:hover { border-color:var(--accent); }
 
 /* ── DEBUG LOG MODAL ─────────────────────────────────────── */
 .dbg-tabs { display:flex;border-bottom:1px solid var(--border); }
@@ -891,13 +913,12 @@ body.detail-open { overflow:hidden;position:fixed;width:100%; }
           <button class="overflow-item" onclick="openSettings();closeOverflowMenu()" style="color:var(--muted)">⚙ Settings</button>
         </div>
       </div>
-      <div class="account-pill">
+      <div class="account-pill" onclick="openSettings()" title="Account &amp; Settings" style="cursor:pointer">
         <div class="account-avatar" id="user-avatar">?</div>
         <div class="account-info">
           <span class="account-label">Signed in as</span>
           <span class="account-email" id="user-email"></span>
         </div>
-        <button class="btn-signout" id="signout-btn" onclick="openSettings()" title="Account &amp; Settings">⚙ Settings</button>
       </div>
     </div>
   </header>
@@ -1522,10 +1543,23 @@ function openSettings() {
   modal.classList.add('open');
   document.body.style.overflow = 'hidden';
   // Populate dynamic fields
+  const email = window._fbUser?.email || '—';
   const emailEl = document.getElementById('settings-email');
-  if (emailEl) emailEl.textContent = window._fbUser?.email || '—';
+  if (emailEl) emailEl.textContent = email;
+  const avatarEl = document.getElementById('settings-avatar');
+  if (avatarEl) avatarEl.textContent = email && email !== '—' ? email[0].toUpperCase() : '?';
+  const lib = window._lib || [];
   const libCount = document.getElementById('settings-lib-count');
-  if (libCount) libCount.textContent = (window._lib || []).length + ' manga';
+  if (libCount) libCount.textContent = lib.length.toLocaleString();
+  const chReadEl = document.getElementById('settings-ch-read');
+  if (chReadEl) {
+    const total = lib.reduce((sum, m) => sum + (m.chRead || 0), 0);
+    chReadEl.textContent = total.toLocaleString();
+  }
+  const newCountEl = document.getElementById('settings-new-count');
+  if (newCountEl) newCountEl.textContent = lib.filter(m => m.hasNew).length.toLocaleString();
+  const completedEl = document.getElementById('settings-completed-count');
+  if (completedEl) completedEl.textContent = lib.filter(m => m.readingStatus === 'completed').length.toLocaleString();
   const themeLbl = document.getElementById('settings-theme-lbl');
   if (themeLbl) themeLbl.textContent = document.body.classList.contains('light') ? 'Light' : 'Dark';
   // Highlight active layout buttons
@@ -3825,42 +3859,76 @@ rebuildCollectionFilter();
       <div class="modal-title">⚙ SETTINGS</div>
       <button class="close-btn" onclick="closeSettings()">✕</button>
     </div>
+
+    <!-- Account -->
     <div class="settings-section">
       <div class="settings-section-title">Account</div>
-      <div class="settings-row">
-        <span class="settings-label">Signed in as</span>
-        <span class="settings-val" id="settings-email">—</span>
+      <div class="settings-account-box">
+        <div class="settings-avatar" id="settings-avatar">?</div>
+        <div class="settings-account-info">
+          <div class="settings-account-label">Signed in as</div>
+          <div class="settings-account-email" id="settings-email">—</div>
+        </div>
       </div>
-      <div class="settings-row" style="margin-top:14px">
-        <button class="btn btn-outline" style="width:100%;justify-content:center" onclick="closeSettings();window._fbLogout&&window._fbLogout()">Sign Out</button>
+      <button class="btn btn-outline" style="width:100%;justify-content:center" onclick="closeSettings();window._fbLogout&&window._fbLogout()">Sign Out</button>
+    </div>
+
+    <!-- Stats -->
+    <div class="settings-section">
+      <div class="settings-section-title">Library Stats</div>
+      <div class="settings-stats">
+        <div class="settings-stat">
+          <div class="settings-stat-val" id="settings-lib-count">0</div>
+          <div class="settings-stat-lbl">Manga Tracked</div>
+        </div>
+        <div class="settings-stat">
+          <div class="settings-stat-val" id="settings-ch-read">0</div>
+          <div class="settings-stat-lbl">Chapters Read</div>
+        </div>
+        <div class="settings-stat">
+          <div class="settings-stat-val" id="settings-new-count">0</div>
+          <div class="settings-stat-lbl">New Chapters</div>
+        </div>
+        <div class="settings-stat">
+          <div class="settings-stat-val" id="settings-completed-count">0</div>
+          <div class="settings-stat-lbl">Completed</div>
+        </div>
       </div>
     </div>
+
+    <!-- Appearance -->
     <div class="settings-section">
       <div class="settings-section-title">Appearance</div>
       <div class="settings-row">
         <span class="settings-label">Theme</span>
-        <button class="btn btn-outline btn-sm" onclick="toggleTheme();document.getElementById('settings-theme-lbl').textContent=document.body.classList.contains('light')?'Light':'Dark'">
-          <span id="settings-theme-lbl">Dark</span> — tap to switch
-        </button>
+        <div class="settings-btn-group">
+          <button class="btn btn-outline" onclick="toggleTheme();document.getElementById('settings-theme-lbl').textContent=document.body.classList.contains('light')?'Light':'Dark'">
+            <span id="settings-theme-lbl">Dark</span> — tap to switch
+          </button>
+        </div>
       </div>
-      <div class="settings-row">
+      <div class="settings-row" style="margin-bottom:0">
         <span class="settings-label">Layout</span>
-        <div style="display:flex;gap:4px">
-          <button class="btn btn-outline btn-sm" onclick="setLayout('2col');closeSettings()" id="set-2col-btn">2 Column</button>
-          <button class="btn btn-outline btn-sm" onclick="setLayout('1col');closeSettings()" id="set-1col-btn">1 Column</button>
+        <div class="settings-btn-group">
+          <button class="btn btn-outline" onclick="setLayout('2col');closeSettings()" id="set-2col-btn">2 Col</button>
+          <button class="btn btn-outline" onclick="setLayout('1col');closeSettings()" id="set-1col-btn">1 Col</button>
         </div>
       </div>
     </div>
+
+    <!-- Data -->
     <div class="settings-section">
       <div class="settings-section-title">Data</div>
-      <div class="settings-row">
-        <span class="settings-label">Library</span>
-        <span class="settings-val" id="settings-lib-count">0 manga</span>
-      </div>
-      <div class="settings-row" style="gap:8px;flex-wrap:wrap">
-        <button class="btn btn-outline btn-sm" onclick="closeSettings();openImport()">⬆ Import</button>
-        <button class="btn btn-outline btn-sm" onclick="closeSettings();openExport()">⬇ Export</button>
-        <button class="btn btn-outline btn-sm" onclick="closeSettings();openDebugLog()" style="color:var(--accent3);border-color:var(--accent3)">🔧 Check Log</button>
+      <div class="settings-actions">
+        <button class="settings-action-btn" onclick="closeSettings();openImport()">
+          <span class="sab-icon">⬆</span>Import
+        </button>
+        <button class="settings-action-btn" onclick="closeSettings();openExport()">
+          <span class="sab-icon">⬇</span>Export
+        </button>
+        <button class="settings-action-btn" onclick="closeSettings();openDebugLog()" style="color:var(--accent3);border-color:var(--accent3)">
+          <span class="sab-icon">🔧</span>Check Log
+        </button>
       </div>
     </div>
   </div>
