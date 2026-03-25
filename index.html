@@ -8,37 +8,45 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="MangaTrack">
-<title>MangaTrack v19</title>
+<title>MangaTrack v18</title>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+JP:wght@400;700;900&family=DM+Mono:ital,wght@0,300;0,400;0,500;1,300&family=Bebas+Neue&display=swap" rel="stylesheet">
 
 <!-- ═══════════════════════════════════════════════════════
-     MANGATRACK v19 — CHANGELOG (refactor from v18)
+     SUPABASE SETUP — REPLACE THE VALUES BELOW WITH YOUR OWN
+     from https://supabase.com/dashboard → Project Settings → API
      ═══════════════════════════════════════════════════════
-     BUGS FIXED:
-     1. mal-panel-al: duplicate inline display property (display:none overridden
-        by display:flex) caused the AniList panel to always be visible on open.
-     2. openImport: did not reset MAL subtab to default (MAL XML) on reopen,
-        so the previously active subtab state persisted incorrectly.
-     3. checkDuplicate: did not exclude the currently-edited manga (editId),
-        causing a false "already in library" warning when editing any title.
-     4. cloudSave: had unused `lib` and `log` parameters in its signature —
-        the function body reads window._lib/log via _buildSaveBody() directly.
-     5. checkAllUpdates: when the user pressed STOP, customPool.then() was never
-        attached (early return happened before it), so _debugActive stayed true
-        and the URL-warnings badge on the debug panel never updated.
-     6. _saveProxyPrefs: used a function property (_saveProxyPrefs._t) as a
-        debounce timer ID — replaced with a proper module-level variable.
-     7. switchMALSubtab: MAL panel was set to display:flex but it should be
-        display:block; AniList panel (column layout) should use display:flex.
+     Also run this SQL in the Supabase SQL editor once:
+
+     create table if not exists user_data (
+       id uuid primary key references auth.users(id) on delete cascade,
+       lib text not null default '[]',
+       log text not null default '[]',
+       collections text not null default '[]',
+       updated_at bigint not null default 0,
+       last_check bigint not null default 0
+     );
+     alter table user_data enable row level security;
+     create policy "Users manage own data" on user_data
+       for all using (auth.uid() = id) with check (auth.uid() = id);
+
+     -- If you already ran the original migration, add the new columns with:
+     -- alter table user_data add column if not exists last_check bigint not null default 0;
+     -- alter table user_data add column if not exists proxy_prefs text not null default '{}';
+
+     In Auth → Settings, set "Enable email confirmations" to OFF
+     so users can sign in immediately after registering.
      ═══════════════════════════════════════════════════════ -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
+// ▼▼▼ PASTE YOUR SUPABASE PROJECT URL AND ANON KEY HERE ▼▼▼
 const SUPABASE_URL  = 'https://oszsrqxpfxxxnoyikpnf.supabase.co';
 const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9zenNycXhwZnh4eG5veWlrcG5mIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIxNDU5MTYsImV4cCI6MjA4NzcyMTkxNn0.FjoaKZPMdU69vDvexn0l-aNzV1p1a_kRUwgzXW0Dv6c';
+// ▲▲▲ PASTE YOUR SUPABASE PROJECT URL AND ANON KEY HERE ▲▲▲
 
 const _sb = (typeof supabase !== 'undefined')
   ? supabase.createClient(SUPABASE_URL, SUPABASE_ANON)
   : { from: () => ({ select: async () => ({ data: null, error: new Error('Supabase SDK not loaded — open on your deployed site') }), eq: function(){return this;}, single: async function(){return {data:null,error:new Error('Supabase SDK not loaded')};} }), auth: { getSession: async () => ({ data: { session: null } }), onAuthStateChange: () => ({ data: { subscription: { unsubscribe: ()=>{} } } }), signInWithPassword: async () => ({ error: new Error('Open the app at your deployed URL to sign in') }), signUp: async () => ({ error: new Error('Open the app at your deployed URL to sign up') }), signOut: async () => ({}) } };
+if (typeof supabase === 'undefined') console.warn('Supabase SDK not loaded — preview only. Open your deployed site to use the app.');
 
 
 
@@ -60,7 +68,7 @@ function _buildSaveBody(uid) {
   });
 }
 
-async function cloudSave(uid) {
+async function cloudSave(uid, lib, log) {
   try {
     if (!uid || !lib || lib.length === 0) return false;
     const token = window._sessionToken;
@@ -1247,7 +1255,7 @@ body.detail-open { overflow:hidden;position:fixed;width:100%; }
             <div style="margin-top:6px;font-size:9px;opacity:.5">Supports .xml from MyAnimeList</div>
           </div>
         </div>
-        <div id="mal-panel-al" style="display:none;flex-direction:column;gap:10px">
+        <div id="mal-panel-al" style="display:none;display:flex;flex-direction:column;gap:10px">
           <div class="info-note"><strong>AniList:</strong> Enter your AniList username to import your public manga list. Your list must be set to public.</div>
           <div style="display:flex;gap:8px;align-items:center">
             <input class="form-input" id="al-username" placeholder="AniList username…" style="flex:1">
@@ -2099,16 +2107,13 @@ const _PROXY_PREFS_KEY = 'mgt_proxy_prefs';
   } catch {}
 })();
 
-// Module-level timer for debouncing proxy-prefs cloud saves
-let _saveProxyPrefsTimer = null;
-
 function _saveProxyPrefs() {
   try {
     localStorage.setItem(_PROXY_PREFS_KEY, JSON.stringify(_lastGoodProxyByDomain));
   } catch {}
   // Debounce cloud save — proxy prefs change frequently, no need to spam
-  clearTimeout(_saveProxyPrefsTimer);
-  _saveProxyPrefsTimer = setTimeout(() => _cloudSaveProxyPrefs(), 5000);
+  clearTimeout(_saveProxyPrefs._t);
+  _saveProxyPrefs._t = setTimeout(() => _cloudSaveProxyPrefs(), 5000);
 }
 
 async function _cloudSaveProxyPrefs() {
@@ -3106,30 +3111,9 @@ async function checkAllUpdates() {
   btn.classList.remove('spinning'); btn.disabled = false;
   if (cancelBtn) cancelBtn.style.display = 'none';
 
-  // Always attach the customPool cleanup handler so _debugActive and the URL
-  // warnings badge are updated even if the user pressed STOP.
-  customPool.then(() => {
-    updLog = updLog.slice(0, LOG_CAP);
-    saveLib(); saveLog(); renderLib(); renderLog();
-    if (window._fbUser) window._fbSave && window._fbSave();
-    window._debugActive = false;
-    // Update URL warnings badge on debug tab
-    const urlFails = (window._lib||[]).filter(m => m.customUrl && m.scrapeOk === false);
-    const urlTab = document.getElementById('dbg-tab-urls');
-    if (urlTab) urlTab.textContent = urlFails.length ? '⚠ URL WARNINGS (' + urlFails.length + ')' : '⚠ URL WARNINGS';
-    _dlog('DONE', 'Check complete', { found, done, failed: (window._lib||[]).filter(m=>m.scrapeOk===false).length });
-    // Only show the "all done" toast if the check wasn't cancelled
-    if (!window._wasStopped) {
-      if (found > 0) showToast('🎉 All done — ' + found + ' new update' + (found>1?'s':'') + '!');
-      else showToast('All up to date ✓');
-    }
-    window._wasStopped = false;
-  });
-
   if (window._checkStop) {
-    window._wasStopped = true;
     window._checkStop = false;
-    // Note: _debugActive and badge are cleaned up by customPool.then() above
+    window._debugActive = false;
     _dlog('WARN', 'Check stopped by user', { done, found });
     showToast('Check stopped — ' + done + ' checked, ' + found + ' new');
     return;
@@ -3144,6 +3128,20 @@ async function checkAllUpdates() {
   _startCooldownDisplay(); // start countdown on the button
   if (found > 0) showToast('🎉 ' + found + ' new update' + (found>1?'s':'') + '! (custom URLs still checking…)');
   else showToast('MangaDex done ✓ — custom URLs still checking…');
+
+  customPool.then(() => {
+    updLog = updLog.slice(0, LOG_CAP);
+    saveLib(); saveLog(); renderLib(); renderLog();
+    if (window._fbUser) window._fbSave && window._fbSave();
+    window._debugActive = false;
+    // Update URL warnings badge on debug tab
+    const urlFails = (window._lib||[]).filter(m => m.customUrl && m.scrapeOk === false);
+    const urlTab = document.getElementById('dbg-tab-urls');
+    if (urlTab) urlTab.textContent = urlFails.length ? '⚠ URL WARNINGS (' + urlFails.length + ')' : '⚠ URL WARNINGS';
+    _dlog('DONE', 'Check complete', { found, done, failed: (window._lib||[]).filter(m=>m.scrapeOk===false).length });
+    if (found > 0) showToast('🎉 All done — ' + found + ' new update' + (found>1?'s':'') + '!');
+    else showToast('All up to date ✓');
+  });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -3424,7 +3422,6 @@ function checkDuplicate(title) {
   const norm = t => t.toLowerCase().replace(/[^a-z0-9]/g,'');
   const input = norm(title);
   const dup = lib.find(m => {
-    if (m.id === editId) return false; // never flag the item being edited as a duplicate
     const existing = norm(m.title);
     if (existing===input) return true;
     const shorter=Math.min(existing.length,input.length), longer=Math.max(existing.length,input.length);
@@ -3513,12 +3510,12 @@ async function selectMD(info){document.getElementById('f-title').value=info.titl
 // ─────────────────────────────────────────────────────────────────────────────
 // IMPORT / EXPORT (unchanged)
 // ─────────────────────────────────────────────────────────────────────────────
-function openImport(){importQueue=[];document.getElementById('import-modal').classList.add('open');document.body.style.overflow='hidden';document.getElementById('import-footer').style.display='none';document.getElementById('paste-input').value='';document.getElementById('bulk-input').value='';document.getElementById('paste-preview').innerHTML='';document.getElementById('file-preview').innerHTML='';document.getElementById('mal-preview').innerHTML='';document.getElementById('mal-progress').style.display='none';switchIETab('paste');switchMALSubtab('mal');}
+function openImport(){importQueue=[];document.getElementById('import-modal').classList.add('open');document.body.style.overflow='hidden';document.getElementById('import-footer').style.display='none';document.getElementById('paste-input').value='';document.getElementById('bulk-input').value='';document.getElementById('paste-preview').innerHTML='';document.getElementById('file-preview').innerHTML='';document.getElementById('mal-preview').innerHTML='';document.getElementById('mal-progress').style.display='none';switchIETab('paste');}
 function closeImport(){document.getElementById('import-modal').classList.remove('open');document.body.style.overflow='';}
 function openExport(){document.getElementById('export-count').textContent=lib.length;const preview=lib.map(m=>({title:m.title,type:m.type,readingStatus:m.readingStatus,chRead:m.chRead,chLatest:m.chLatest,mdId:m.mdId||'',customUrl:m.customUrl||'',chSource:m.chSource||'',seriesStatus:m.seriesStatus||'ongoing',cover:m.cover||'',contentRating:m.contentRating||'safe',scrapeOk:m.scrapeOk??null,scrapeAt:m.scrapeAt||0,lastUpdated:m.lastUpdated||0,addedAt:m.addedAt||0}));document.getElementById('export-preview').value=JSON.stringify(preview,null,2);document.getElementById('export-modal').classList.add('open');document.body.style.overflow='hidden';}
 function closeExport(){document.getElementById('export-modal').classList.remove('open');document.body.style.overflow='';}
 function switchIETab(name){currentIETab=name;document.querySelectorAll('.ie-tab').forEach((t,i)=>t.classList.toggle('active',['paste','file','bulk','mal'][i]===name));document.querySelectorAll('.ie-panel').forEach(p=>p.classList.remove('active'));document.getElementById('ie-'+name).classList.add('active');}
-function switchMALSubtab(name){['mal','al'].forEach(n=>{document.getElementById('mal-subtab-'+n).classList.toggle('active',n===name);const panel=document.getElementById('mal-panel-'+n);if(panel)panel.style.display=n===name?(n==='al'?'flex':'block'):'none';});}
+function switchMALSubtab(name){['mal','al'].forEach(n=>{document.getElementById('mal-subtab-'+n).classList.toggle('active',n===name);document.getElementById('mal-panel-'+n).style.display=n===name?'flex':'none';});}
 function renderImportPreview(containerId){const c=document.getElementById(containerId);if(!importQueue.length){c.innerHTML='';return;}c.innerHTML='<div class="import-preview">'+importQueue.map(item=>'<div class="preview-row"><div class="preview-status '+(item.status==='ok'?'ps-ok':item.status==='dup'?'ps-dup':'ps-err')+'"></div><div class="preview-title">'+esc(item.title)+'</div><div class="preview-meta">Ch.'+(item.chRead||0)+(item.status==='dup'?' · DUP':'')+'</div></div>').join('')+'</div>';document.getElementById('import-footer').style.display='flex';document.getElementById('do-import-btn').disabled=false;}
 function parsePasteInput(){const raw=document.getElementById('paste-input').value.trim();if(!raw){showToast('Nothing to import!','err');return;}importQueue=raw.split('\n').map(line=>{const parts=line.split(',');const title=parts[0].trim();if(!title)return null;const chRead=parseFloat(parts[1])||0;const existing=lib.find(m=>m.title.toLowerCase()===title.toLowerCase());return{title,chRead,type:'manga',readingStatus:'reading',status:existing?'dup':'ok'};}).filter(Boolean);renderImportPreview('paste-preview');}
 async function doImport(){
