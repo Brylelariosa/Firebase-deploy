@@ -125,26 +125,44 @@ async function cloudLoad(uid) {
 }
 
 // ── PER-MANGA SMART MERGE ─────────────────────────────────────────────────────
-// Always takes the highest chRead and chLatest per manga so reading progress
-// never goes backwards and found chapters never disappear, regardless of which
-// device saved last. Manga only on one side are always preserved.
+// - chRead/chLatest: always take the max so progress never goes backwards
+// - customUrl, readingStatus, collections: prefer whichever device has the
+//   newer lastUpdated timestamp so edits made on one device reach the other
+// - cover, seriesStatus, chSource: always from cloud (authoritative scrape data)
 function _mergeLibs(local, cloud) {
   const result = [];
   const cloudMap = new Map(cloud.map(m => [m.id, m]));
   const localMap = new Map(local.map(m => [m.id, m]));
-  // Cloud is the base — iterate it first (has latest scrape data, cover, etc.)
+
   for (const cm of cloud) {
     const lm = localMap.get(cm.id);
     if (lm) {
+      // Progress: always take the max so reading never goes backwards
       const chRead   = Math.max(cm.chRead   || 0, lm.chRead   || 0);
       const chLatest = Math.max(cm.chLatest || 0, lm.chLatest || 0);
-      // Use cloud for all metadata; override progress fields with the max
-      result.push({ ...cm, chRead, chLatest, hasNew: chLatest > chRead });
+
+      // For user-editable fields prefer whichever side was touched more recently.
+      // Cloud wins on equal timestamps — it is the canonical source.
+      const localNewer = (lm.lastUpdated || 0) > (cm.lastUpdated || 0);
+      const preferred  = localNewer ? lm : cm;
+      const fallback   = localNewer ? cm : lm;
+
+      result.push({
+        ...cm,                                          // cloud base: cover, seriesStatus, chSource, etc.
+        customUrl:     preferred.customUrl     !== undefined ? preferred.customUrl     : (fallback.customUrl     || ''),
+        readingStatus: preferred.readingStatus || fallback.readingStatus || 'reading',
+        collections:   (preferred.collections  || fallback.collections  || []),
+        chRead,
+        chLatest,
+        hasNew:      chLatest > chRead,
+        lastUpdated: Math.max(cm.lastUpdated || 0, lm.lastUpdated || 0),
+      });
     } else {
       result.push(cm); // manga only on cloud
     }
   }
-  // Add manga that exist only locally (added while offline / not yet on cloud)
+
+  // Manga that exist only locally (added offline / not yet pushed to cloud)
   for (const lm of local) {
     if (!cloudMap.has(lm.id)) result.push(lm);
   }
@@ -3468,7 +3486,7 @@ async function save(){const title=document.getElementById('f-title').value.trim(
   if (mdId) {
     const dupId = lib.find(m => m.mdId === mdId && m.id !== editId);
     if (dupId) { showToast('That MangaDex ID is already used by "'+dupId.title+'"','err'); return; }
-  }const chRead=parseFloat(document.getElementById('f-chread').value)||0;const chLatest=parseFloat(document.getElementById('f-chlatest').value)||0;const selCols=getSelectedCollections();if(editId){const m=lib.find(x=>x.id===editId);m.title=title;m.mdId=mdId;m.customUrl=customUrl;m.type=document.getElementById('f-type').value;m.readingStatus=document.getElementById('f-rstatus').value;m.chRead=chRead;if(chLatest>0)m.chLatest=Math.max(chLatest,m.chLatest||0);m.hasNew=(m.chLatest||0)>m.chRead;m.collections=selCols;showToast('Saved ✓');}else{let cover='',seriesStatus='ongoing';if(mdId){try{const d=await mdFetch('/manga/'+mdId+'?includes[]=cover_art');cover=coverUrl(d.data)||'';seriesStatus=d.data?.attributes?.status||'ongoing';}catch{}}lib.push({id:uid(),title,mdId,customUrl,cover,seriesStatus,type:document.getElementById('f-type').value,readingStatus:document.getElementById('f-rstatus').value,chRead,chLatest,hasNew:chLatest>chRead&&chLatest>0,collections:selCols,contentRating:window._pendingCR||'safe',addedAt:Date.now()});showToast('"'+title+'" added! ✓');}saveLib();closeModal();renderLib();}
+  }const chRead=parseFloat(document.getElementById('f-chread').value)||0;const chLatest=parseFloat(document.getElementById('f-chlatest').value)||0;const selCols=getSelectedCollections();if(editId){const m=lib.find(x=>x.id===editId);m.title=title;m.mdId=mdId;m.customUrl=customUrl;m.type=document.getElementById('f-type').value;m.readingStatus=document.getElementById('f-rstatus').value;m.chRead=chRead;if(chLatest>0)m.chLatest=Math.max(chLatest,m.chLatest||0);m.hasNew=(m.chLatest||0)>m.chRead;m.collections=selCols;m.lastUpdated=Date.now();showToast('Saved ✓');}else{let cover='',seriesStatus='ongoing';if(mdId){try{const d=await mdFetch('/manga/'+mdId+'?includes[]=cover_art');cover=coverUrl(d.data)||'';seriesStatus=d.data?.attributes?.status||'ongoing';}catch{}}lib.push({id:uid(),title,mdId,customUrl,cover,seriesStatus,type:document.getElementById('f-type').value,readingStatus:document.getElementById('f-rstatus').value,chRead,chLatest,hasNew:chLatest>chRead&&chLatest>0,collections:selCols,contentRating:window._pendingCR||'safe',addedAt:Date.now(),lastUpdated:Date.now()});showToast('"'+title+'" added! ✓');}saveLib();closeModal();renderLib();}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MANGADEX LIVE SEARCH
