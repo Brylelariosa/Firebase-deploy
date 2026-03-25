@@ -465,6 +465,19 @@ body::before { content:''; position:fixed; inset:0; background:radial-gradient(e
 .sync-dot.err { background:var(--accent); animation:none; }
 .sync-dot.offline { background:#f59e0b; animation:none; }
 
+/* ── SYNC BANNER ─────────────────────────────────────────── */
+#sync-banner { width:100%; padding:9px 16px; font-size:10px; letter-spacing:.5px; display:flex; align-items:center; gap:10px; animation:slideDown .25s ease; }
+#sync-banner.banner-capped  { background:rgba(232,56,90,.12); border-bottom:1px solid rgba(232,56,90,.3); color:var(--accent); }
+#sync-banner.banner-offline { background:rgba(245,158,11,.1);  border-bottom:1px solid rgba(245,158,11,.3); color:#f59e0b; }
+#sync-banner.banner-err     { background:rgba(232,56,90,.08);  border-bottom:1px solid rgba(232,56,90,.2); color:var(--accent); }
+#sync-banner .banner-icon   { font-size:14px; flex-shrink:0; }
+#sync-banner .banner-text   { flex:1; line-height:1.5; }
+#sync-banner .banner-action { background:none; border:1px solid currentColor; color:inherit; font-family:'DM Mono',monospace; font-size:9px; letter-spacing:1.5px; padding:4px 10px; cursor:pointer; white-space:nowrap; text-transform:uppercase; opacity:.85; transition:opacity .15s; flex-shrink:0; }
+#sync-banner .banner-action:hover { opacity:1; }
+#sync-banner .banner-dismiss { background:none; border:none; color:inherit; font-size:16px; cursor:pointer; opacity:.5; padding:0 2px; flex-shrink:0; transition:opacity .15s; }
+#sync-banner .banner-dismiss:hover { opacity:1; }
+@keyframes slideDown { from{opacity:0;transform:translateY(-8px)} to{opacity:1;transform:translateY(0)} }
+
 header { padding:14px 0 12px; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; }
 .logo-title { font-family:'Bebas Neue',sans-serif; font-size:34px; letter-spacing:5px; line-height:1; }
 .logo-title span { color:var(--accent); }
@@ -542,7 +555,7 @@ header { padding:14px 0 12px; border-bottom:1px solid var(--border); display:fle
 .ch-read { font-size:10px; color:var(--muted); display:flex; align-items:center; gap:3px; }
 .ch-latest { font-size:12px; color:var(--text); }
 .ch-latest.new { color:var(--accent3); }
-.card-actions { display:grid; grid-template-columns:repeat(3,1fr); gap:3px; }
+.card-actions { display:grid; grid-template-columns:repeat(5,1fr); gap:3px; }
 .icon-btn { background:var(--surface); border:1px solid var(--border); color:var(--muted); width:100%; height:28px; padding:0; display:flex; align-items:center; justify-content:center; cursor:pointer; font-size:13px; transition:all .14s; }
 .icon-btn:hover { border-color:var(--accent3); color:var(--accent3); }
 .icon-btn:active { background:rgba(0,210,211,.07); }
@@ -676,7 +689,7 @@ header { padding:14px 0 12px; border-bottom:1px solid var(--border); display:fle
 @media(max-width:480px){
   .grid.two-col { grid-template-columns:1fr 1fr; }
   .grid:not(.two-col) { grid-template-columns:1fr; }
-  .card-actions { grid-template-columns:repeat(3,1fr); }
+  .card-actions { grid-template-columns:repeat(5,1fr); }
   .wrap { padding:0 12px; }
   .modal { max-height:95vh; }
   .account-pill { max-width:160px; }
@@ -927,6 +940,9 @@ body.detail-open { overflow:hidden;position:fixed;width:100%; }
       </div>
     </div>
   </header>
+
+  <!-- Sync status banner — shown for restricted data, offline, or save failures -->
+  <div id="sync-banner" style="display:none"></div>
 
   <div class="stats">
     <div class="stat"><div class="stat-val c1" id="s-total">0</div><div class="stat-label">Tracking</div></div>
@@ -1732,42 +1748,70 @@ function saveLog() {
   if (window._sessionToken) setSyncDot('syncing');
   _scheduleCloudSave();
 }
+function _showSyncBanner(type, icon, text, actionLabel, actionFn) {
+  const b = document.getElementById('sync-banner');
+  if (!b) return;
+  b.className = 'banner-' + type;
+  b.style.display = 'flex';
+  b.innerHTML =
+    '<span class="banner-icon">' + icon + '</span>'
+    + '<span class="banner-text">' + text + '</span>'
+    + (actionLabel ? '<button class="banner-action" id="banner-action-btn">' + actionLabel + '</button>' : '')
+    + '<button class="banner-dismiss" onclick="document.getElementById(\'sync-banner\').style.display=\'none\'" title="Dismiss">✕</button>';
+  if (actionLabel && actionFn) {
+    const btn = document.getElementById('banner-action-btn');
+    if (btn) btn.onclick = actionFn;
+  }
+}
+function _hideSyncBanner() {
+  const b = document.getElementById('sync-banner');
+  if (b) b.style.display = 'none';
+}
+
 function setSyncDot(state) {
   const d = document.getElementById('sync-dot');
   const lbl = document.getElementById('sync-label');
   if (!d) return;
+
   if (state === 'syncing') {
     d.className = 'sync-dot syncing';
     if (lbl) { lbl.textContent = 'SAVING…'; lbl.style.cursor = ''; lbl.onclick = null; }
+    _hideSyncBanner();
+
   } else if (state === 'offline') {
-    d.className = 'sync-dot err';
-    if (lbl) {
-      lbl.textContent = 'SAVED LOCALLY — will sync when online';
-      lbl.style.cursor = 'default'; lbl.onclick = null;
-    }
+    d.className = 'sync-dot offline';
+    if (lbl) { lbl.textContent = 'OFFLINE'; lbl.style.cursor = 'default'; lbl.onclick = null; }
+    _showSyncBanner('offline', '📶',
+      'No internet connection — your data is saved locally and will sync automatically when you\'re back online.',
+      null, null);
+
   } else if (state === 'err') {
     d.className = 'sync-dot err';
-    if (lbl) {
-      // Detect likely restricted connection: navigator.onLine is true but save fails.
-      // This is the Dito Facebook promo / carrier-restricted data scenario.
-      const likelyCapped = navigator.onLine && window._cappedConnection;
-      const msg = !navigator.onLine
-        ? 'SAVED LOCALLY — sync when online'
-        : likelyCapped
-          ? 'RESTRICTED DATA — open in Opera to sync ↗'
-          : 'SAVE FAILED — tap to retry';
-      lbl.textContent = msg;
-      lbl.style.cursor = (navigator.onLine && !likelyCapped) ? 'pointer' : 'default';
-      lbl.onclick = (navigator.onLine && !likelyCapped) ? async () => {
-        if (!window._fbSave) return;
-        setSyncDot('syncing');
-        const ok = await window._fbSave();
-        setSyncDot(ok === false ? 'err' : 'ok');
-      } : null;
+    const likelyCapped = navigator.onLine && window._cappedConnection;
+    if (lbl) { lbl.textContent = likelyCapped ? 'RESTRICTED' : 'SYNC ERR'; lbl.style.cursor = 'default'; lbl.onclick = null; }
+
+    if (likelyCapped) {
+      _showSyncBanner('capped', '⚠',
+        'Restricted data detected — your carrier is blocking cloud sync. Data is saved locally. Open in Opera (free VPN) to sync.',
+        'Open in Opera',
+        () => window.open('opera://open-url?url=' + encodeURIComponent(location.href), '_blank') || window.open('https://www.opera.com/mobile', '_blank'));
+    } else {
+      _showSyncBanner('err', '✕',
+        'Cloud save failed — your data is saved locally.',
+        'Retry',
+        async () => {
+          if (!window._fbSave) return;
+          _hideSyncBanner();
+          setSyncDot('syncing');
+          const ok = await window._fbSave();
+          setSyncDot(ok === false ? 'err' : 'ok');
+        });
     }
+
   } else {
     d.className = 'sync-dot';
     if (lbl) { lbl.textContent = 'SYNCED'; lbl.style.cursor = ''; lbl.onclick = null; }
+    _hideSyncBanner();
   }
 }
 
