@@ -31,41 +31,14 @@
      7. switchMALSubtab: MAL panel was set to display:flex but it should be
         display:block; AniList panel (column layout) should use display:flex.
      ═══════════════════════════════════════════════════════ -->
- — REPLACE THE VALUES BELOW WITH YOUR OWN
-     from https://supabase.com/dashboard → Project Settings → API
-     ═══════════════════════════════════════════════════════
-     Also run this SQL in the Supabase SQL editor once:
-
-     create table if not exists user_data (
-       id uuid primary key references auth.users(id) on delete cascade,
-       lib text not null default '[]',
-       log text not null default '[]',
-       collections text not null default '[]',
-       updated_at bigint not null default 0,
-       last_check bigint not null default 0
-     );
-     alter table user_data enable row level security;
-     create policy "Users manage own data" on user_data
-       for all using (auth.uid() = id) with check (auth.uid() = id);
-
-     -- If you already ran the original migration, add the new columns with:
-     -- alter table user_data add column if not exists last_check bigint not null default 0;
-     -- alter table user_data add column if not exists proxy_prefs text not null default '{}';
-
-     In Auth → Settings, set "Enable email confirmations" to OFF
-     so users can sign in immediately after registering.
-     ═══════════════════════════════════════════════════════ -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
-// ▼▼▼ PASTE YOUR SUPABASE PROJECT URL AND ANON KEY HERE ▼▼▼
 const SUPABASE_URL  = 'https://oszsrqxpfxxxnoyikpnf.supabase.co';
 const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9zenNycXhwZnh4eG5veWlrcG5mIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIxNDU5MTYsImV4cCI6MjA4NzcyMTkxNn0.FjoaKZPMdU69vDvexn0l-aNzV1p1a_kRUwgzXW0Dv6c';
-// ▲▲▲ PASTE YOUR SUPABASE PROJECT URL AND ANON KEY HERE ▲▲▲
 
 const _sb = (typeof supabase !== 'undefined')
   ? supabase.createClient(SUPABASE_URL, SUPABASE_ANON)
   : { from: () => ({ select: async () => ({ data: null, error: new Error('Supabase SDK not loaded — open on your deployed site') }), eq: function(){return this;}, single: async function(){return {data:null,error:new Error('Supabase SDK not loaded')};} }), auth: { getSession: async () => ({ data: { session: null } }), onAuthStateChange: () => ({ data: { subscription: { unsubscribe: ()=>{} } } }), signInWithPassword: async () => ({ error: new Error('Open the app at your deployed URL to sign in') }), signUp: async () => ({ error: new Error('Open the app at your deployed URL to sign up') }), signOut: async () => ({}) } };
-if (typeof supabase === 'undefined') console.warn('Supabase SDK not loaded — preview only. Open your deployed site to use the app.');
 
 
 
