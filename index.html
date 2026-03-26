@@ -199,24 +199,31 @@ function startRealtimeSync(uid) {
     }, payload => {
       const d = payload.new;
       const cloudTime = d.updated_at || 0;
-      const localTime = window._lastSaveTime || 0;
-      if (cloudTime > localTime + REALTIME_GRACE_MS) {
+      // ── Always apply realtime updates ────────────────────────────────────────
+      // The old grace-period check (ignore if cloudTime < localTime + 2s) caused
+      // Device B to silently drop updates from Device A whenever both devices had
+      // recently saved. Removed — _mergeLibs always takes max(chRead, chLatest)
+      // so applying our own echo is harmless and guarantees no update is missed.
+      {
         const oldLib = window._lib || [];
         const incomingLib = JSON.parse(d.lib || '[]');
-        incomingLib.forEach(m => { if (m.cover) m.cover = cleanCoverUrl(m.cover); });
+        // Backfill missing ids on incoming entries (same as cloudLoad does)
+        incomingLib.forEach(m => {
+          if (!m.id) m.id = m.mdId || (m.title + '_' + (m.addedAt || 0));
+          if (m.cover) m.cover = cleanCoverUrl(m.cover);
+        });
 
-        // Per-manga smart merge — never clobber local chRead progress
+        // Per-manga smart merge — always takes max(chRead, chLatest)
         const newLib = _mergeLibs(oldLib, incomingLib);
 
         // Detect new chapters (for toast notification)
         const newChapters = newLib.filter(m => {
-          const old = oldLib.find(o => o.id === m.id);
+          const old = oldLib.find(o => _mangaKey(o) === _mangaKey(m));
           return old && m.chLatest > (old.chLatest || 0);
         });
 
         window._lib = newLib;
-        // Bug fix: union-merge the log instead of replacing it, so local
-        // unsynced read-progress entries are never clobbered by realtime events.
+        // Union-merge the log so local unsynced entries are never clobbered
         const incomingLog = JSON.parse(d.log || '[]');
         const logMap = new Map();
         [...(window._log || []), ...incomingLog].forEach(u => { if (!logMap.has(u.id)) logMap.set(u.id, u); });
@@ -225,7 +232,7 @@ function startRealtimeSync(uid) {
 
         // If local had higher chRead for any manga, push the merge back to cloud
         const hadLocalProgress = incomingLib.some(cm => {
-          const lm = oldLib.find(x => x.id === cm.id);
+          const lm = oldLib.find(x => _mangaKey(x) === _mangaKey(cm));
           return lm && (lm.chRead || 0) > (cm.chRead || 0);
         });
         if (hadLocalProgress && window._fbSave) {
