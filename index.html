@@ -253,6 +253,17 @@ _sb.auth.onAuthStateChange(async (event, session) => {
     // Set _fbUser immediately so skeleton/auth checks work
     window._fbUser = user;
 
+    // ── Single definitive _fbSave — always includes mgt2_time tracking ───────
+    window._fbSave = () => {
+      const now = Date.now();
+      window._lastSaveTime = now;
+      localStorage.setItem(userLibKey, JSON.stringify(window._lib));
+      localStorage.setItem(userLogKey, JSON.stringify(window._log));
+      localStorage.setItem(userColKey, JSON.stringify(window._collections));
+      localStorage.setItem('mgt2_time_' + user.id, String(now));
+      return cloudSave(user.id, window._lib, window._log);
+    };
+
     // ── STEP 1: Show cached data instantly (zero delay) ──────────────────────
     const cachedLib = localStorage.getItem(userLibKey);
     const cachedLog = localStorage.getItem(userLogKey);
@@ -269,13 +280,15 @@ _sb.auth.onAuthStateChange(async (event, session) => {
       window.renderLib && window.renderLib();
       window.updateStats && window.updateStats();
     }
-    window._fbSave = () => {
-      window._lastSaveTime = Date.now();
-      localStorage.setItem(userLibKey, JSON.stringify(window._lib));
-      localStorage.setItem(userLogKey, JSON.stringify(window._log));
-      localStorage.setItem(userColKey, JSON.stringify(window._collections));
-      return cloudSave(user.id, window._lib, window._log);
-    };
+
+    // ── Skip expensive cloud re-sync on token refresh if already loaded ───────
+    // TOKEN_REFRESHED fires every ~60 min. Re-running the full merge block would
+    // briefly flash stale cached data and is unnecessary — realtime keeps us in sync.
+    // Only skip if we actually have data; a fresh device still needs the full sync.
+    if (event === 'TOKEN_REFRESHED' && (window._lib || []).length > 0) {
+      startRealtimeSync(user.id); // ensure WebSocket stays alive after token rotation
+      return;
+    }
 
     // ── STEP 2: Smart merge — newest data wins ──────────────────────────────────
     const cloud = await cloudLoad(user.id);
@@ -344,16 +357,8 @@ _sb.auth.onAuthStateChange(async (event, session) => {
     });
     if (coversUpgraded) window._fbSave && window._fbSave();
 
+    // _fbSave is already defined above (single definition) — just start realtime now
     startRealtimeSync(user.id);
-    window._fbSave = () => {
-      const now = Date.now();
-      window._lastSaveTime = now;
-      localStorage.setItem(userLibKey, JSON.stringify(window._lib));
-      localStorage.setItem(userLogKey, JSON.stringify(window._log));
-      localStorage.setItem(userColKey, JSON.stringify(window._collections));
-      localStorage.setItem('mgt2_time_' + user.id, String(now));
-      return cloudSave(user.id, window._lib, window._log);
-    };
     // Check if last session left an unsynced save (e.g. app closed on throttled data)
     setTimeout(_checkPendingSyncOnLoad, 3000);
     // Start cooldown countdown on Check Updates button if a recent check exists
@@ -2649,6 +2654,7 @@ function isMadaraSite(url) {
     'zinmanga','kunmanga','kunmanga','s2manga','topmanhua','wuxiaworld',
     'manhuaplus','aquamanga','dragontea','gedecomix','mangatop','manhwaland',
     'manhwaclan','manhwatop','mahnwalike','manhwas','readmanhua','manhwaz',
+    'arenascan','kingofshojo','elftoon',
     'readmanhwa','readmanga','readzom','reset-scans','sleepy-scans',
     'suryascans','taboocomics','theblank','titanscans','tokyoscans',
     'tvmanga','undergroundscans','windyscans','x-b-m','zahard',
@@ -2656,6 +2662,34 @@ function isMadaraSite(url) {
     'rawdevart','rawkuma','rawmanga'
   ];
   return madara.some(d => url.includes(d));
+}
+
+// mangago.me — uses /read-manga/slug/ structure with chapter links like /1/c123/
+async function mangagoChapter(url) {
+  const res = await raceFetch(url, 8000);
+  if (!res) return null;
+  const html = await res.text();
+  // Chapter links: /read-manga/slug/1/c123/ or ?id=12345&chapter=123
+  const nums = [
+    ...[...html.matchAll(/\/c(\d+(?:\.\d+)?)\/?(?:["'?#]|$)/gi)].map(m => parseFloat(m[1])),
+    ...[...html.matchAll(/chapter[=_-](\d+(?:\.\d+)?)/gi)].map(m => parseFloat(m[1])),
+    ...[...html.matchAll(/Ch(?:apter)?\.?\s*(\d+(?:\.\d+)?)/gi)].map(m => parseFloat(m[1])),
+  ].filter(n => n > 0 && n < 99999);
+  return nums.length ? Math.max(...nums) : null;
+}
+
+// mangafreak.me — uses /Manga/Title_Name with chapter list as links
+async function mangafreakChapter(url) {
+  const res = await raceFetch(url, 8000);
+  if (!res) return null;
+  const html = await res.text();
+  // Chapter links: /Manga/Title_Chapter_N or text "Chapter N"
+  const nums = [
+    ...[...html.matchAll(/Chapter[_\s-]+(\d+(?:\.\d+)?)/gi)].map(m => parseFloat(m[1])),
+    ...[...html.matchAll(/href="[^"]*_Chapter_(\d+(?:\.\d+)?)[/"]/gi)].map(m => parseFloat(m[1])),
+    ...[...html.matchAll(/href="[^"]*\/chapter-(\d+(?:\.\d+)?)[/"]/gi)].map(m => parseFloat(m[1])),
+  ].filter(n => n > 0 && n < 99999);
+  return nums.length ? Math.max(...nums) : null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2674,6 +2708,8 @@ async function scrapeChapterFromUrl(url) {
     return await mangaseeChapter(url);
   if (url.includes('webtoons.com'))  return await webtoonsChapter(url);
   if (url.includes('tcbscans'))      return await tcbChapter(url);
+  if (url.includes('mangago.me'))    return await mangagoChapter(url);
+  if (url.includes('mangafreak'))    return await mangafreakChapter(url);
   // Sites that migrated from Madara to Next.js — let the generic scraper handle them
   // via __NEXT_DATA__ extraction (added above). Skip the madaraChapter call for these.
   const isNextJsSite = ['asurascans','asuratoon','asuracomic','asura.gg','flamescans','flamecomics','reaperscans','voidscans','voidscan'].some(d => url.includes(d));
@@ -2829,14 +2865,36 @@ async function previewCustomUrl(val) {
   const visitBtn = document.getElementById('visit-url-btn');
   if (!el) return;
   clearTimeout(urlPreviewTimer);
+
+  // Auto-add https:// if user typed a bare domain
+  if (val && !val.startsWith('http') && val.includes('.') && !val.startsWith(' ')) {
+    val = 'https://' + val.trim();
+    const inp = document.getElementById('f-customurl');
+    if (inp) inp.value = val;
+  }
+
   if (!val || !val.startsWith('http')) {
-    el.textContent = '';
+    el.innerHTML = '';
     if (visitBtn) visitBtn.style.display = 'none';
     return;
   }
   if (visitBtn) visitBtn.style.display = 'inline-flex';
+
+  // Warn if the URL looks like a chapter page rather than a series page
+  const isChapterUrl = /\/(chapter|read|ch|ep)[/-]?\d+/i.test(val)
+    || /[?&](chapter|ch|page)=/i.test(val);
+  if (isChapterUrl) {
+    el.style.color = 'var(--accent2)';
+    el.textContent = '⚠ Looks like a chapter URL — paste the series/manga page instead';
+    return;
+  }
+
+  // Show the domain being tested
+  let domain = '';
+  try { domain = new URL(val).hostname.replace(/^www\./, ''); } catch {}
   el.style.color = 'var(--muted)';
-  el.textContent = 'Detecting…';
+  el.textContent = 'Detecting' + (domain ? ' from ' + domain : '') + '…';
+
   urlPreviewTimer = setTimeout(async () => {
     const n = await scrapeChapterWithRetry(val, attempt => {
       el.style.color = 'var(--muted)';
@@ -2844,10 +2902,10 @@ async function previewCustomUrl(val) {
     });
     if (n) {
       el.style.color = 'var(--accent3)';
-      el.textContent = '✓ Detected Ch.' + n + ' from this URL';
+      el.textContent = '✓ Detected Ch.' + n + (domain ? ' from ' + domain : '');
     } else {
       el.style.color = 'var(--accent)';
-      el.textContent = '✗ Could not detect chapter — try a different page';
+      el.textContent = '✗ Could not detect chapter — try the series page on a different site';
     }
   }, 800);
 }
