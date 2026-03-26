@@ -112,16 +112,36 @@ async function cloudLoad(uid) {
     const { data, error } = await _sb.from('user_data').select('*').eq('id', uid).single();
     if (error || !data) return null;
     const lib = JSON.parse(data.lib || '[]');
-    lib.forEach(m => { if (m.cover) m.cover = cleanCoverUrl(m.cover); });
+    // ── Backfill missing `id` fields ──────────────────────────────────────────
+    // Older library entries saved before the id field was introduced have no id.
+    // Assign a stable id derived from mdId (preferred) or title+addedAt so the
+    // merge logic can match entries across devices instead of treating every item
+    // as a unique stranger.
+    let needsResave = false;
+    lib.forEach(m => {
+      if (!m.id) {
+        m.id = m.mdId || (m.title + '_' + (m.addedAt || 0));
+        needsResave = true;
+      }
+      if (m.cover) m.cover = cleanCoverUrl(m.cover);
+    });
     return {
       lib,
       log: JSON.parse(data.log || '[]'),
       collections: JSON.parse(data.collections || '[]'),
       proxy_prefs: data.proxy_prefs ? JSON.parse(data.proxy_prefs) : null,
       updated_at: data.updated_at || 0,
-      last_check: data.last_check || 0
+      last_check: data.last_check || 0,
+      _needsResave: needsResave
     };
   } catch(e) { console.warn('Cloud load failed:', e); return null; }
+}
+
+// ── Stable key for matching manga across devices ──────────────────────────────
+// Uses `id` when present; falls back to `mdId` then `title+addedAt` for legacy
+// entries that were saved before the id field existed.
+function _mangaKey(m) {
+  return m.id || m.mdId || (m.title + '_' + (m.addedAt || 0));
 }
 
 // ── PER-MANGA SMART MERGE ─────────────────────────────────────────────────────
@@ -131,11 +151,11 @@ async function cloudLoad(uid) {
 // - cover, seriesStatus, chSource: always from cloud (authoritative scrape data)
 function _mergeLibs(local, cloud) {
   const result = [];
-  const cloudMap = new Map(cloud.map(m => [m.id, m]));
-  const localMap = new Map(local.map(m => [m.id, m]));
+  const cloudMap = new Map(cloud.map(m => [_mangaKey(m), m]));
+  const localMap = new Map(local.map(m => [_mangaKey(m), m]));
 
   for (const cm of cloud) {
-    const lm = localMap.get(cm.id);
+    const lm = localMap.get(_mangaKey(cm));
     if (lm) {
       // Progress: always take the max so reading never goes backwards
       const chRead   = Math.max(cm.chRead   || 0, lm.chRead   || 0);
@@ -164,7 +184,7 @@ function _mergeLibs(local, cloud) {
 
   // Manga that exist only locally (added offline / not yet pushed to cloud)
   for (const lm of local) {
-    if (!cloudMap.has(lm.id)) result.push(lm);
+    if (!cloudMap.has(_mangaKey(lm))) result.push(lm);
   }
   return result;
 }
