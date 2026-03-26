@@ -1721,6 +1721,21 @@ document.getElementById('set-ch-overlay').addEventListener('click', e => { if (e
 // Cloud save is debounced 1s so rapid actions batch into one request.
 let _cloudSaveTimer = null;
 
+// _saveSyncSafe — like calling _fbSave() directly but also marks pending
+// sync if the save fails, so an online reconnect will retry automatically.
+// Use instead of raw window._fbSave() anywhere a save could fail silently.
+async function _saveSyncSafe() {
+  if (!window._fbSave) return;
+  const ok = await window._fbSave();
+  if (ok === false) {
+    _setPendingSync(true);
+    setSyncDot(navigator.onLine ? 'err' : 'offline');
+  } else {
+    _setPendingSync(false);
+    setSyncDot('ok');
+  }
+}
+
 function _scheduleCloudSave() {
   clearTimeout(_cloudSaveTimer);
   _cloudSaveTimer = setTimeout(async () => {
@@ -2056,6 +2071,16 @@ async function _cacheSet(url, html) {
     if (!db) return;
     const tx = db.transaction('html', 'readwrite');
     tx.objectStore('html').put({ url, ...entry });
+  } catch {}
+}
+
+async function _cacheDel(url) {
+  _htmlCache.delete(url);
+  try {
+    const db = await _idb;
+    if (!db) return;
+    const tx = db.transaction('html', 'readwrite');
+    tx.objectStore('html').delete(url);
   } catch {}
 }
 
@@ -2518,14 +2543,55 @@ async function madaraChapter(url) {
   const validHref = hrefNums.filter(n => n > 0 && n < 99999);
   if (validHref.length) return Math.max(...validHref);
 
-  // PRIORITY 2: data-chapter & text fallback (last resort — data-chapter can be WP post IDs)
-  const nums = [];
-  for (const m of html.matchAll(/data-chapter="([0-9]+(?:\.[0-9]+)?)"/gi))
-    nums.push(parseFloat(m[1]));
+  // PRIORITY 2: text-based "Chapter N" — reliable, not affected by WP post IDs
+  const textNums = [];
   for (const m of html.matchAll(/>\s*Chapter\s+([0-9]+(?:\.[0-9]+)?)\s*</gi))
-    nums.push(parseFloat(m[1]));
-  const valid = nums.filter(n => n > 0 && n < 99999);
-  return valid.length ? Math.max(...valid) : null;
+    textNums.push(parseFloat(m[1]));
+  const validText = textNums.filter(n => n > 0 && n < 10000);
+  if (validText.length) return Math.max(...validText);
+
+  // PRIORITY 3: data-chapter — last resort, but cap at 9999 to skip WP post IDs.
+  // WordPress post IDs (e.g. 3148, 12847) are often stored in data-chapter on
+  // lazy-loaded Madara sites. Real chapter numbers are always < 9999.
+  const dataChNums = [];
+  for (const m of html.matchAll(/data-chapter="([0-9]+(?:\.[0-9]+)?)"/gi))
+    dataChNums.push(parseFloat(m[1]));
+  const validDataCh = dataChNums.filter(n => n > 0 && n < 9999);
+  if (validDataCh.length) return Math.max(...validDataCh);
+
+  // PRIORITY 4: admin-ajax POST — for Madara sites that lazy-load their chapter
+  // list entirely via JavaScript. Fetch the post ID from data-id, then POST to
+  // admin-ajax.php which returns the full rendered chapter list as HTML.
+  if (apiBase) {
+    const dataIdMatch = html.match(/data-id="(\d+)"/);
+    if (dataIdMatch) {
+      const postId = dataIdMatch[1];
+      const ajaxBody = `action=manga_get_chapters&manga=${postId}`;
+      for (const proxy of ['https://corsproxy.io/?', 'https://cors.eu.org/']) {
+        try {
+          const ajaxRes = await Promise.race([
+            fetch(proxy + encodeURIComponent(`${apiBase}/wp-admin/admin-ajax.php`), {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+              body: ajaxBody
+            }),
+            new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 8000))
+          ]);
+          if (ajaxRes && ajaxRes.ok) {
+            const ajaxHtml = await ajaxRes.text();
+            const ajaxNums = [];
+            for (const m of ajaxHtml.matchAll(/href="[^"]*\/chapter-([0-9]+(?:\.[0-9]+)?)[\/"?]/gi))
+              ajaxNums.push(parseFloat(m[1]));
+            for (const m of ajaxHtml.matchAll(/>\s*Chapter\s+([0-9]+(?:\.[0-9]+)?)\s*</gi))
+              ajaxNums.push(parseFloat(m[1]));
+            const validAjax = ajaxNums.filter(n => n > 0 && n < 99999);
+            if (validAjax.length) return Math.max(...validAjax);
+          }
+        } catch {}
+      }
+    }
+  }
+  return null;
 }
 
 // weebcentral.com — dedicated scraper
@@ -2664,18 +2730,28 @@ function isMadaraSite(url) {
   return madara.some(d => url.includes(d));
 }
 
-// mangago.me — uses /read-manga/slug/ structure with chapter links like /1/c123/
+// mangago.me — series pages like /read-manga/slug/
+// Chapter links: /read-manga/slug/c113/ or /read-manga/slug/c113/1.html
 async function mangagoChapter(url) {
   const res = await raceFetch(url, 8000);
   if (!res) return null;
   const html = await res.text();
-  // Chapter links: /read-manga/slug/1/c123/ or ?id=12345&chapter=123
-  const nums = [
-    ...[...html.matchAll(/\/c(\d+(?:\.\d+)?)\/?(?:["'?#]|$)/gi)].map(m => parseFloat(m[1])),
-    ...[...html.matchAll(/chapter[=_-](\d+(?:\.\d+)?)/gi)].map(m => parseFloat(m[1])),
-    ...[...html.matchAll(/Ch(?:apter)?\.?\s*(\d+(?:\.\d+)?)/gi)].map(m => parseFloat(m[1])),
-  ].filter(n => n > 0 && n < 99999);
-  return nums.length ? Math.max(...nums) : null;
+
+  const nums = [];
+  // Most precise: match only chapter links that share the same manga slug
+  const slugMatch = url.match(/\/read-manga\/([^/?#]+)/i);
+  if (slugMatch) {
+    const escaped = slugMatch[1].replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp('/read-manga/' + escaped + '/c(\\d+(?:\\.\\d+)?)', 'gi');
+    for (const m of html.matchAll(re)) nums.push(parseFloat(m[1]));
+  }
+  // Fallback: any href containing /cNN/ (2+ digits avoids /c1/ volume links)
+  if (!nums.length) {
+    for (const m of html.matchAll(/href="[^"]*\/c(\d{2,}(?:\.\d+)?)(?:\/|\.html)/gi))
+      nums.push(parseFloat(m[1]));
+  }
+  const valid = nums.filter(n => n > 0 && n < 99999);
+  return valid.length ? Math.max(...valid) : null;
 }
 
 // mangafreak.me — uses /Manga/Title_Name with chapter list as links
@@ -2837,14 +2913,16 @@ async function scrapeChapterWithRetry(url, onRetry) {
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     if (attempt > 1) {
-      _htmlCache.delete(url); // bust cache so next attempt hits proxies fresh
+      _htmlCache.delete(url); // bust in-memory cache
       if (effectiveBaseUrl) _htmlCache.delete(effectiveBaseUrl);
+      // Also bust IDB so retries fetch fresh HTML, not the cached failure
+      _cacheDel(url);
+      if (effectiveBaseUrl) _cacheDel(effectiveBaseUrl);
       // On even retries, reset preferred proxy so a different one is tried
       if (attempt % 2 === 0) delete _lastGoodProxyByDomain[_hostOf(url)]; // rotate domain proxy on even retries
       if (onRetry) onRetry(attempt);
       const retryDelay = DELAYS[attempt - 1] || 3000;
       await new Promise(r => setTimeout(r, retryDelay));
-    } else {
     }
     // On the last attempt, also try the base URL if it differs
     const urlToTry = (attempt === MAX_ATTEMPTS && effectiveBaseUrl) ? effectiveBaseUrl : url;
@@ -2886,6 +2964,15 @@ async function previewCustomUrl(val) {
   if (isChapterUrl) {
     el.style.color = 'var(--accent2)';
     el.textContent = '⚠ Looks like a chapter URL — paste the series/manga page instead';
+    return;
+  }
+  // Warn if it looks like a search results page — scraping search results
+  // is unreliable (returns multiple manga mixed together)
+  const isSearchUrl = /[?&](s|q|search|query|keyword)=/i.test(val)
+    || /\/search(\?|$|\/)/i.test(val);
+  if (isSearchUrl) {
+    el.style.color = 'var(--accent2)';
+    el.textContent = '⚠ Search page URL — try to find the direct series page instead for reliable tracking';
     return;
   }
 
@@ -3169,7 +3256,8 @@ async function checkAllUpdates() {
   btn.classList.remove('spinning'); btn.disabled = false;
   if (cancelBtn) cancelBtn.style.display = 'none';
 
-  if (window._checkStop) {
+  const wasStopped = window._checkStop;
+  if (wasStopped) {
     window._checkStop = false;
     window._debugActive = false;
     _dlog('WARN', 'Check stopped by user', { done, found });
@@ -3181,7 +3269,7 @@ async function checkAllUpdates() {
   window._lastCheckTime = checkTime;
   if (window._fbUser) {
     localStorage.setItem('mgt_last_check_' + window._fbUser.id, String(checkTime));
-    window._fbSave && window._fbSave();
+    _saveSyncSafe();
   }
   _startCooldownDisplay(); // start countdown on the button
   if (found > 0) showToast('🎉 ' + found + ' new update' + (found>1?'s':'') + '! (custom URLs still checking…)');
@@ -3190,15 +3278,18 @@ async function checkAllUpdates() {
   customPool.then(() => {
     updLog = updLog.slice(0, LOG_CAP);
     saveLib(); saveLog(); renderLib(); renderLog();
-    if (window._fbUser) window._fbSave && window._fbSave();
+    if (window._fbUser) _saveSyncSafe();
     window._debugActive = false;
     // Update URL warnings badge on debug tab
     const urlFails = (window._lib||[]).filter(m => m.customUrl && m.scrapeOk === false);
     const urlTab = document.getElementById('dbg-tab-urls');
     if (urlTab) urlTab.textContent = urlFails.length ? '⚠ URL WARNINGS (' + urlFails.length + ')' : '⚠ URL WARNINGS';
     _dlog('DONE', 'Check complete', { found, done, failed: (window._lib||[]).filter(m=>m.scrapeOk===false).length });
-    if (found > 0) showToast('🎉 All done — ' + found + ' new update' + (found>1?'s':'') + '!');
-    else showToast('All up to date ✓');
+    // Don't show "All done" if user had already stopped — they already saw a STOP toast
+    if (!wasStopped) {
+      if (found > 0) showToast('🎉 All done — ' + found + ' new update' + (found>1?'s':'') + '!');
+      else showToast('All up to date ✓');
+    }
   });
 }
 
@@ -3544,7 +3635,7 @@ async function save(){const title=document.getElementById('f-title').value.trim(
   if (mdId) {
     const dupId = lib.find(m => m.mdId === mdId && m.id !== editId);
     if (dupId) { showToast('That MangaDex ID is already used by "'+dupId.title+'"','err'); return; }
-  }const chRead=parseFloat(document.getElementById('f-chread').value)||0;const chLatest=parseFloat(document.getElementById('f-chlatest').value)||0;const selCols=getSelectedCollections();if(editId){const m=lib.find(x=>x.id===editId);m.title=title;m.mdId=mdId;m.customUrl=customUrl;m.type=document.getElementById('f-type').value;m.readingStatus=document.getElementById('f-rstatus').value;m.chRead=chRead;if(chLatest>0)m.chLatest=Math.max(chLatest,m.chLatest||0);m.hasNew=(m.chLatest||0)>m.chRead;m.collections=selCols;m.lastUpdated=Date.now();showToast('Saved ✓');}else{let cover='',seriesStatus='ongoing';if(mdId){try{const d=await mdFetch('/manga/'+mdId+'?includes[]=cover_art');cover=coverUrl(d.data)||'';seriesStatus=d.data?.attributes?.status||'ongoing';}catch{}}lib.push({id:uid(),title,mdId,customUrl,cover,seriesStatus,type:document.getElementById('f-type').value,readingStatus:document.getElementById('f-rstatus').value,chRead,chLatest,hasNew:chLatest>chRead&&chLatest>0,collections:selCols,contentRating:window._pendingCR||'safe',addedAt:Date.now(),lastUpdated:Date.now()});showToast('"'+title+'" added! ✓');}saveLib();closeModal();renderLib();}
+  }const chRead=parseFloat(document.getElementById('f-chread').value)||0;const chLatest=parseFloat(document.getElementById('f-chlatest').value)||0;const selCols=getSelectedCollections();if(editId){const m=lib.find(x=>x.id===editId);m.title=title;m.mdId=mdId;m.customUrl=customUrl;m.type=document.getElementById('f-type').value;m.readingStatus=document.getElementById('f-rstatus').value;m.chRead=chRead;if(chLatest>0)m.chLatest=Math.max(chLatest,m.chLatest||0);m.hasNew=(m.chLatest||0)>m.chRead;m.collections=selCols;m.lastUpdated=Date.now();/* Update chSource to match the new customUrl state */if(customUrl&&m.chSource!=='Custom URL')m.chSource='Custom URL';else if(!customUrl&&m.chSource==='Custom URL')m.chSource=m.mdId?'MangaDex':'';showToast('Saved ✓');}else{let cover='',seriesStatus='ongoing';if(mdId){try{const d=await mdFetch('/manga/'+mdId+'?includes[]=cover_art');cover=coverUrl(d.data)||'';seriesStatus=d.data?.attributes?.status||'ongoing';}catch{}}lib.push({id:uid(),title,mdId,customUrl,cover,seriesStatus,type:document.getElementById('f-type').value,readingStatus:document.getElementById('f-rstatus').value,chRead,chLatest,hasNew:chLatest>chRead&&chLatest>0,collections:selCols,contentRating:window._pendingCR||'safe',addedAt:Date.now(),lastUpdated:Date.now()});showToast('"'+title+'" added! ✓');}saveLib();closeModal();renderLib();}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MANGADEX LIVE SEARCH
