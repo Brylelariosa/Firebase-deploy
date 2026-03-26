@@ -189,6 +189,40 @@ function _mergeLibs(local, cloud) {
   return result;
 }
 
+// --- REALTIME SYNC ENGINE ---
+// This listens for updates from your other phone (e.g., 65 -> 66)
+supabase
+  .channel('manga-sync')
+  .on(
+    'postgres_changes',
+    {
+      event: 'UPDATE',
+      schema: 'public',
+      table: 'user_data'
+    },
+    (payload) => {
+      console.log('Update detected from another device!');
+      try {
+        // Parse the new library from the database
+        const cloudLib = JSON.parse(payload.new.lib || '[]');
+        
+        // Merge it with your current screen data using your exact function above
+        data = _mergeLibs(data, cloudLib);
+        
+        // Refresh the list visually
+        if (typeof create_list === 'function') {
+          create_list();
+          console.log('UI updated with new chapter data.');
+        }
+      } catch (e) {
+        console.error("Sync error:", e);
+      }
+    }
+  )
+  .subscribe();
+// --- END REALTIME SYNC ENGINE ---
+
+
 // Real-time listener so multiple devices sync instantly
 function startRealtimeSync(uid) {
   if (_realtimeChannel) _sb.removeChannel(_realtimeChannel);
