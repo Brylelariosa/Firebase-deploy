@@ -157,19 +157,15 @@ function _mergeLibs(local, cloud) {
   for (const cm of cloud) {
     const lm = localMap.get(_mangaKey(cm));
     if (lm) {
-      // Progress: always take the max so reading never goes backwards
       const chRead   = Math.max(cm.chRead   || 0, lm.chRead   || 0);
       const chLatest = Math.max(cm.chLatest || 0, lm.chLatest || 0);
-
-      // For user-editable fields prefer whichever side was touched more recently.
-      // Cloud wins on equal timestamps — it is the canonical source.
       const localNewer = (lm.lastUpdated || 0) > (cm.lastUpdated || 0);
       const preferred  = localNewer ? lm : cm;
       const fallback   = localNewer ? cm : lm;
 
       result.push({
-        ...cm,                                          // cloud base: cover, seriesStatus, chSource, etc.
-        customUrl:     preferred.customUrl     !== undefined ? preferred.customUrl     : (fallback.customUrl     || ''),
+        ...cm,
+        customUrl:     preferred.customUrl !== undefined ? preferred.customUrl : (fallback.customUrl || ''),
         readingStatus: preferred.readingStatus || fallback.readingStatus || 'reading',
         collections:   (preferred.collections  || fallback.collections  || []),
         chRead,
@@ -178,49 +174,40 @@ function _mergeLibs(local, cloud) {
         lastUpdated: Math.max(cm.lastUpdated || 0, lm.lastUpdated || 0),
       });
     } else {
-      result.push(cm); // manga only on cloud
+      result.push(cm);
     }
   }
-
-  // Manga that exist only locally (added offline / not yet pushed to cloud)
   for (const lm of local) {
     if (!cloudMap.has(_mangaKey(lm))) result.push(lm);
   }
   return result;
 }
 
-// --- REALTIME SYNC ENGINE ---
-// This listens for updates from your other phone (e.g., 65 -> 66)
-supabase
-  .channel('manga-sync')
-  .on(
-    'postgres_changes',
-    {
-      event: 'UPDATE',
-      schema: 'public',
-      table: 'user_data'
-    },
-    (payload) => {
-      console.log('Update detected from another device!');
-      try {
-        // Parse the new library from the database
-        const cloudLib = JSON.parse(payload.new.lib || '[]');
-        
-        // Merge it with your current screen data using your exact function above
-        data = _mergeLibs(data, cloudLib);
-        
-        // Refresh the list visually
-        if (typeof create_list === 'function') {
-          create_list();
-          console.log('UI updated with new chapter data.');
+// THIS IS THE NEW SAFE SYNC FUNCTION
+function initRealtimeSync() {
+  if (!supabase || typeof supabase.channel !== 'function') {
+    console.error("Supabase Realtime not ready yet.");
+    return;
+  }
+
+  supabase
+    .channel('manga-sync')
+    .on(
+      'postgres_changes',
+      { event: 'UPDATE', schema: 'public', table: 'user_data' },
+      (payload) => {
+        try {
+          const cloudLib = JSON.parse(payload.new.lib || '[]');
+          data = _mergeLibs(data, cloudLib);
+          if (typeof create_list === 'function') create_list();
+        } catch (e) {
+          console.error("Sync error:", e);
         }
-      } catch (e) {
-        console.error("Sync error:", e);
       }
-    }
-  )
-  .subscribe();
-// --- END REALTIME SYNC ENGINE ---
+    )
+    .subscribe();
+}
+
 
 
 // Real-time listener so multiple devices sync instantly
