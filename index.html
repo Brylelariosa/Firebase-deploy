@@ -224,10 +224,13 @@ function startRealtimeSync(uid) {
         window._log = [...logMap.values()].sort((a, b) => b.time - a.time).slice(0, LOG_CAP);
         if (d.collections) window._collections = JSON.parse(d.collections || '[]');
 
-        // If local had higher chRead for any manga, push the merge back to cloud
+        // If local had higher chRead, newer lastUpdated (e.g. customUrl edit), or manga not in cloud, push merge back
         const hadLocalProgress = incomingLib.some(cm => {
           const lm = oldLib.find(x => _mangaKey(x) === _mangaKey(cm));
-          return lm && (lm.chRead || 0) > (cm.chRead || 0);
+          return lm && (
+            (lm.chRead     || 0) > (cm.chRead     || 0) ||
+            (lm.lastUpdated|| 0) > (cm.lastUpdated|| 0)   // catches customUrl / status changes
+          );
         });
         if (hadLocalProgress && window._fbSave) {
           // Small delay so we don't immediately echo back while Supabase is settling
@@ -349,7 +352,10 @@ _sb.auth.onAuthStateChange(async (event, session) => {
       // If local had higher chRead/chLatest on any manga, merged is ahead of cloud → push up
       const mergedAheadOfCloud = merged.some(mm => {
         const cm = cloud.lib.find(x => x.id === mm.id);
-        return !cm || (mm.chRead || 0) > (cm.chRead || 0) || (mm.chLatest || 0) > (cm.chLatest || 0);
+        return !cm
+          || (mm.chRead    || 0) > (cm.chRead    || 0)
+          || (mm.chLatest  || 0) > (cm.chLatest  || 0)
+          || (mm.lastUpdated|| 0) > (cm.lastUpdated|| 0);  // catches customUrl / status edits
       }) || merged.length > cloud.lib.length; // local had manga not in cloud
       if (mergedAheadOfCloud) {
         const now = Date.now();
@@ -3782,16 +3788,20 @@ async function quickAddSuggestion(info) {
 // ─────────────────────────────────────────────────────────────────────────────
 // MODAL
 // ─────────────────────────────────────────────────────────────────────────────
-let editId=null, mdTimer=null, importQueue=[], currentIETab='paste';
-function openAdd(){editId=null;document.getElementById('modal-title').textContent='ADD MANGA';document.getElementById('search-section').style.display='';clearForm();renderCollectionsField(null);document.getElementById('modal').classList.add('open');document.body.style.overflow='hidden';}
-function openEdit(id){const m=lib.find(x=>x.id===id);if(!m)return;editId=id;document.getElementById('modal-title').textContent='EDIT MANGA';document.getElementById('search-section').style.display='none';document.getElementById('f-title').value=m.title;document.getElementById('f-type').value=m.type;document.getElementById('f-rstatus').value=m.readingStatus;document.getElementById('f-chread').value=m.chRead||'';document.getElementById('f-chlatest').value=m.chLatest||0;document.getElementById('f-mdid').value=m.mdId||'';document.getElementById('f-customurl').value=m.customUrl||'';const _vb=document.getElementById('visit-url-btn');if(_vb)_vb.style.display=m.customUrl?'inline-flex':'none';const disp=document.getElementById('f-chlatest-display');if(disp){disp.textContent=m.chLatest>0?'Ch.'+m.chLatest+(m.chSource?'  ('+m.chSource+')':''):'Not fetched yet';disp.style.color=m.chLatest>0?'var(--accent3)':'var(--muted)';}renderCollectionsField(id);document.getElementById('modal').classList.add('open');document.body.style.overflow='hidden';}
+let editId=null, _editingOriginalMdId='', mdTimer=null, importQueue=[], currentIETab='paste';
+function openAdd(){editId=null;_editingOriginalMdId='';document.getElementById('modal-title').textContent='ADD MANGA';document.getElementById('search-section').style.display='';clearForm();renderCollectionsField(null);document.getElementById('modal').classList.add('open');document.body.style.overflow='hidden';}
+function openEdit(id){const m=lib.find(x=>x.id===id);if(!m)return;editId=id;_editingOriginalMdId=m.mdId||'';document.getElementById('modal-title').textContent='EDIT MANGA';document.getElementById('search-section').style.display='none';document.getElementById('f-title').value=m.title;document.getElementById('f-type').value=m.type;document.getElementById('f-rstatus').value=m.readingStatus;document.getElementById('f-chread').value=m.chRead||'';document.getElementById('f-chlatest').value=m.chLatest||0;document.getElementById('f-mdid').value=m.mdId||'';document.getElementById('f-customurl').value=m.customUrl||'';const _vb=document.getElementById('visit-url-btn');if(_vb)_vb.style.display=m.customUrl?'inline-flex':'none';const disp=document.getElementById('f-chlatest-display');if(disp){disp.textContent=m.chLatest>0?'Ch.'+m.chLatest+(m.chSource?'  ('+m.chSource+')':''):'Not fetched yet';disp.style.color=m.chLatest>0?'var(--accent3)':'var(--muted)';}renderCollectionsField(id);document.getElementById('modal').classList.add('open');document.body.style.overflow='hidden';}
 function closeModal(){document.getElementById('modal').classList.remove('open');document.getElementById('md-results').classList.remove('open');clearTimeout(mdTimer);document.body.style.overflow='';}
 function clearForm(){['f-title','f-chread','f-mdid','f-customurl','md-search'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});document.getElementById('f-chlatest').value='0';const disp=document.getElementById('f-chlatest-display');if(disp){disp.textContent='Select a title above to auto-fetch';disp.style.color='var(--muted)';}document.getElementById('f-type').value='manga';document.getElementById('f-rstatus').value='reading';const r=document.getElementById('md-results');r.classList.remove('open');r.innerHTML='';hideDupWarning();const prev=document.getElementById('custom-url-preview');if(prev)prev.textContent='';const vb=document.getElementById('visit-url-btn');if(vb)vb.style.display='none';}
 async function save(){const title=document.getElementById('f-title').value.trim();if(!title){showToast('Title is required!','err');return;}const mdId=document.getElementById('f-mdid').value.trim();const customUrl=document.getElementById('f-customurl').value.trim();
-  // Block duplicate MangaDex IDs across different library entries
+  // Block duplicate MangaDex IDs — but only when the mdId is NEW (not the one this manga already had).
+  // This prevents false "duplicate" warnings when editing a manga just to add/change its custom URL.
   if (mdId) {
-    const dupId = lib.find(m => m.mdId === mdId && m.id !== editId);
-    if (dupId) { showToast('That MangaDex ID is already used by "'+dupId.title+'"','err'); return; }
+    const isKeepingOriginalMdId = editId && mdId === _editingOriginalMdId;
+    if (!isKeepingOriginalMdId) {
+      const dupId = lib.find(m => m.mdId === mdId && m.id !== editId);
+      if (dupId) { showToast('That MangaDex ID is already used by "'+dupId.title+'"','err'); return; }
+    }
   }const chRead=parseFloat(document.getElementById('f-chread').value)||0;const chLatest=parseFloat(document.getElementById('f-chlatest').value)||0;const selCols=getSelectedCollections();if(editId){const m=lib.find(x=>x.id===editId);m.title=title;m.mdId=mdId;m.customUrl=customUrl;m.type=document.getElementById('f-type').value;m.readingStatus=document.getElementById('f-rstatus').value;m.chRead=chRead;if(chLatest>0)m.chLatest=Math.max(chLatest,m.chLatest||0);m.hasNew=(m.chLatest||0)>m.chRead;m.collections=selCols;m.lastUpdated=Date.now();/* Update chSource to match the new customUrl state */if(customUrl&&m.chSource!=='Custom URL')m.chSource='Custom URL';else if(!customUrl&&m.chSource==='Custom URL')m.chSource=m.mdId?'MangaDex':'';showToast('Saved ✓');}else{let cover='',seriesStatus='ongoing';if(mdId){try{const d=await mdFetch('/manga/'+mdId+'?includes[]=cover_art');cover=coverUrl(d.data)||'';seriesStatus=d.data?.attributes?.status||'ongoing';}catch{}}lib.push({id:uid(),title,mdId,customUrl,cover,seriesStatus,type:document.getElementById('f-type').value,readingStatus:document.getElementById('f-rstatus').value,chRead,chLatest,hasNew:chLatest>chRead&&chLatest>0,collections:selCols,contentRating:window._pendingCR||'safe',addedAt:Date.now(),lastUpdated:Date.now()});showToast('"'+title+'" added! ✓');}saveLib();closeModal();renderLib();}
 
 // ─────────────────────────────────────────────────────────────────────────────
