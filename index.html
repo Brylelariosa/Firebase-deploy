@@ -3508,7 +3508,7 @@ window.renderLib = function() {
 
   grid.innerHTML = pageItems.map(m => {
     const hasNew = m.hasNew && (m.chLatest > 0) && (m.chLatest > (m.chRead || 0));
-    const behind = Math.max(0, (m.chLatest||0) - (m.chRead||0));
+    const behind = Math.round(Math.max(0, (m.chLatest||0) - (m.chRead||0)) * 10) / 10;
     const ss = m.seriesStatus || 'ongoing';
     const rlabel = { reading:'Reading', completed:'Completed', 'on-hold':'On Hold', dropped:'Dropped', plan:'Plan to Read' }[m.readingStatus] || m.readingStatus;
     const slabel = { ongoing:'Ongoing', completed:'Completed', hiatus:'Hiatus', cancelled:'Cancelled' }[ss] || ss;
