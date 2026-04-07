@@ -2745,7 +2745,7 @@ function isMadaraSite(url) {
     'flamecomics','asuracomic','tcbscans',
     'toonily','mangaclash','mangabat','mangatx','mangatoon','mangatoto',
     'manhuaaz','manhuafast','manhuascan','manhuaus','1stkissmanga',
-    'harimanga','mangabuddy','mangagun','mangahasu','mangahere','mangahub',
+    'harimanga','mangagun','mangahasu','mangahere','mangahub',
     'mangakomi','mangalek','mangaowl','mangapill','mangareader','mangaread',
     'mangasushi','mangatail','mangatoto','mangaweebs','webtoon.xyz',
     'zinmanga','kunmanga','kunmanga','s2manga','topmanhua','wuxiaworld',
@@ -2829,6 +2829,51 @@ async function mangafreakChapter(url) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// mangabuddy.com — server-rendered chapter list in <strong> tags inside <a href="/slug/chapter-N">
+// MangaBuddy has junk entries (typos like "Chapte 79", extra entries, "Read Now" links)
+// so we filter to valid numbers only, deduplicate by chapter number, and take the max.
+async function mangabuddyChapter(url) {
+  const res = await raceFetch(url, 8000);
+  if (!res) return null;
+  const html = await res.text();
+
+  // Extract slug from URL so we only match chapter links for this manga
+  const slugMatch = url.match(/mangabuddy\.com\/([^/?#]+)/i);
+  const slug = slugMatch ? slugMatch[1].replace(/\/$/, '') : null;
+
+  function parseChNum(text) {
+    if (!text) return -1;
+    const cleaned = text.replace(/ch(ap(te?r?)?)?\s*/i, '').trim();
+    const m = cleaned.match(/^(\d+)[.\-]?(\d*)$/);
+    if (!m) return -1;
+    return parseInt(m[1]) + (m[2] ? parseInt(m[2]) / Math.pow(10, m[2].length) : 0);
+  }
+
+  const nums = new Set();
+
+  // Strategy 1: find all chapter hrefs for this slug and parse number from URL path
+  // e.g. /absolute-dominion/chapter-86 → 86
+  if (slug) {
+    const re = new RegExp('href="/' + slug.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '/chapter[^"]*"', 'gi');
+    for (const m of html.matchAll(re)) {
+      const numM = m[0].match(/chapter[_\-](\d+(?:[.\-]\d+)?)["/?]/i);
+      if (numM) {
+        const n = parseChNum('chapter ' + numM[1].replace('-', '.'));
+        if (n >= 0) nums.add(n);
+      }
+    }
+  }
+
+  // Strategy 2: <strong> text inside chapter list links (catches all formats)
+  for (const m of html.matchAll(/<strong>([^<]{2,40})<\/strong>/gi)) {
+    const n = parseChNum(m[1].trim());
+    if (n >= 0 && n < 99999) nums.add(n);
+  }
+
+  const valid = [...nums].filter(n => n >= 0 && n < 99999);
+  return valid.length ? Math.max(...valid) : null;
+}
+
 // DEDICATED SCRAPERS: arenascan.com / kingofshojo.com
 // Both are Madara WordPress but lazy-load their chapter lists via JS.
 // Standard admin-ajax POST doesn't work through GET-only CORS proxies.
@@ -2947,6 +2992,7 @@ async function scrapeChapterFromUrl(url) {
   if (url.includes('tcbscans'))      return await tcbChapter(url);
   if (url.includes('mangago.me'))    return await mangagoChapter(url);
   if (url.includes('mangafreak'))    return await mangafreakChapter(url);
+  if (url.includes('mangabuddy.com')) return await mangabuddyChapter(url);
   // Lazy-loading Madara sites with dedicated smarter scrapers
   if (url.includes('arenascan') || url.includes('kingofshojo')) return await madaraLazyChapter(url);
   // Sites that migrated from Madara to Next.js — let the generic scraper handle them
